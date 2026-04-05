@@ -107,12 +107,13 @@ static void drawPauseIcon(lgfx::LovyanGFX& display, int cx, int cy, uint16_t col
 }
 
 // ── Desenho da tela ──────────────────────────────────────────────────────────
-void screenHomeDraw(lgfx::LovyanGFX& display) {
+void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing) {
     display.fillScreen(TFT_BLACK);
 
     // --- Data + bateria ---
     struct tm timeinfo = {};
-    bool timeOk = getLocalTime(&timeinfo, 0);
+    time_t now = time(nullptr);
+    bool timeOk = (now > 1577836800L) && (localtime_r(&now, &timeinfo) != nullptr);  // válido se > 2020-01-01
 
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(0x8410, TFT_BLACK);
@@ -139,6 +140,14 @@ void screenHomeDraw(lgfx::LovyanGFX& display) {
         display.drawString(timeBuf, display.width() / 2, 85);
     } else {
         display.drawString("--:--:--", display.width() / 2, 85);
+    }
+
+    // --- Indicador de sincronização NTP ---
+    if (syncing) {
+        display.setFont(&fonts::FreeSans9pt7b);
+        display.setTextColor(0x4208, TFT_BLACK);
+        display.setTextDatum(MC_DATUM);
+        display.drawString("atualizando...", display.width() / 2, 108);
     }
 
     // --- Divisor ---

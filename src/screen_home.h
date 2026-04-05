@@ -2,7 +2,7 @@
 #include <M5Unified.h>
 
 bool screenHomeInit();
-void screenHomeDraw(lgfx::LovyanGFX& display);
+void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing = false);
 
 // Chamados pelo handler de toque em main.cpp
 void screenHomeTimerTap();        // toque curto na zona do timer

@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include <esp_sleep.h>
+#include <sys/time.h>
 #include "config.h"
 #include "weather_api.h"
 #include "wifi_manager.h"
@@ -15,6 +16,7 @@ RTC_DATA_ATTR static WeatherData rtcWeather     = {};
 RTC_DATA_ATTR static int         rtcTimerState  = 0;      // 0=SETTING, 2=PAUSED
 RTC_DATA_ATTR static int         rtcTimerPreset = 2;
 RTC_DATA_ATTR static uint32_t    rtcTimerRemain = 5 * 60000;
+RTC_DATA_ATTR static time_t      rtcSavedTime   = 0;      // hora salva antes do deep sleep
 
 // ── Estado volátil (loop) ────────────────────────────────────────────────────
 static int         currentScreen = 0;
@@ -67,16 +69,20 @@ void setup() {
     M5.Speaker.setVolume(200);
 
     // Restaura timezone. No cold boot: configTime() completo (inicia SNTP).
-    // No wake: apenas setenv+tzset — NÃO reinicializa o SNTP para não apagar
-    // o sync do relógio preservado no RTC durante o deep sleep.
     if (isColdBoot) {
         configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     } else {
+        // Restaura timezone e exibe hora aproximada enquanto NTP sincroniza async.
         int h = TIMEZONE_OFFSET_SEC / 3600;
         char tz[16];
         snprintf(tz, sizeof(tz), "UTC%+d", -h);
         setenv("TZ", tz, 1);
         tzset();
+        if (rtcSavedTime > 1577836800L) {
+            struct timeval tv = { .tv_sec = rtcSavedTime, .tv_usec = 0 };
+            settimeofday(&tv, nullptr);
+            Serial.printf("[main] Hora provisória restaurada: %ld\n", (long)rtcSavedTime);
+        }
     }
 
     initSprite();
@@ -91,6 +97,7 @@ void setup() {
         wifiConnectAndFetch(weatherData);
         rtcWeather = weatherData;
         rtcBootCount++;
+        rtcSavedTime = time(nullptr);
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -100,11 +107,12 @@ void setup() {
     weatherData   = rtcWeather;
 
     if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
-        // Restaura estado do timer sem re-inicializar tudo
-        Serial.println("[main] Wake por toque — restaurando estado");
+        // Restaura estado do timer e inicia NTP + clima de forma assíncrona.
+        // A hora provisória já foi restaurada acima via settimeofday.
+        Serial.println("[main] Wake por toque — iniciando NTP async");
         TimerPersist tp = { rtcTimerState, rtcTimerPreset, rtcTimerRemain };
         screenHomeSetTimerPersist(tp);
-        wifiResetFetchTimer();  // agenda próxima busca a partir de agora
+        wifiBeginAsync(weatherData);  // não bloqueia; progride via wifiScheduleUpdate()
     } else {
         // Cold boot: splash + init completo
         Serial.println("[main] Boot inicial");
@@ -180,6 +188,7 @@ void loop() {
         rtcTimerRemain = tp.remainMs;
 
         rtcBootCount++;
+        rtcSavedTime = time(nullptr);
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -219,7 +228,7 @@ void loop() {
     bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400 : 1000));
     if (needsRedraw || timeToRefresh) {
         if (currentScreen == 0) {
-            screenHomeDraw(*fb);
+            screenHomeDraw(*fb, wifiIsFetching());
         } else {
             screenWeatherDraw(*fb, weatherData, wifiIsFetching());
         }

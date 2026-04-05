@@ -1,20 +1,20 @@
 #pragma once
 #include "weather_api.h"
 
-// Inicializa o gerenciador de WiFi. Chame no setup().
+// Inicializa o gerenciador de WiFi no cold boot (bloqueante: connect + NTP + clima).
 void wifiInit(WeatherData& weatherData);
 
-// Disparado no loop — conecta WiFi, busca clima e desliga WiFi quando for a hora.
-// Não bloqueia o loop (retorna imediatamente se já está em andamento ou não é hora).
+// Chamado a cada iteração do loop.
+// Avança a state machine async e dispara nova busca a cada WEATHER_UPDATE_INTERVAL_MS.
 void wifiScheduleUpdate(WeatherData& weatherData);
 
-// Retorna true enquanto o ciclo de busca está em andamento
-bool wifiIsFetching();
+// Inicia ciclo assíncrono: liga WiFi → NTP → clima → desliga.
+// Não bloqueia; progredir via wifiScheduleUpdate().
+void wifiBeginAsync(WeatherData& out);
 
-// Marca NTP como sincronizado e reseta o timer de fetch para agora.
-// Usar ao restaurar estado após deep sleep (evita busca imediata desnecessária).
-void wifiResetFetchTimer();
-
-// Executa ciclo completo: liga WiFi → NTP (só no boot) → busca clima → desliga WiFi.
-// Retorna true se o clima foi atualizado com sucesso.
+// Executa ciclo completo bloqueante: liga WiFi → NTP → clima → desliga.
+// Usar apenas quando a tela está apagada (wake por timer).
 bool wifiConnectAndFetch(WeatherData& out);
+
+// Retorna true enquanto a operação async está em andamento (para indicador na tela).
+bool wifiIsFetching();
