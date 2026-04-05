@@ -1,0 +1,44 @@
+#pragma once
+
+// =============================================================================
+// CONFIGURAÇÃO DO KITCHEN DASHBOARD — M5 CoreS3
+// Copie este arquivo para config.h e preencha com seus dados reais.
+// config.h está no .gitignore para proteger suas credenciais.
+// =============================================================================
+
+// WiFi
+#define WIFI_SSID     "seu_ssid_aqui"
+#define WIFI_PASSWORD "sua_senha_aqui"
+
+// Localização para OpenMeteo (Komatsu, Ishikawa, Japan — ajuste para sua cidade)
+#define GEO_LATITUDE   36.3938
+#define GEO_LONGITUDE  136.4452
+#define TIMEZONE_OFFSET_SEC  32400  // UTC+9 (JST) — UTC+0=0, UTC-3=-10800, UTC+9=32400
+
+// Nome da cidade exibido na tela de clima
+#define CITY_NAME "Komatsu, Ishikawa"
+
+// NTP — servidores de tempo
+#define NTP_SERVER_1 "ntp.nict.jp"
+#define NTP_SERVER_2 "pool.ntp.org"
+
+// Limites de conforto térmico ambiente
+#define COMFORT_TEMP_MIN  18.0f   // °C mínima para conforto
+#define COMFORT_TEMP_MAX  26.0f   // °C máxima para conforto
+#define COMFORT_HUM_MIN   40.0f   // % umidade mínima para conforto
+#define COMFORT_HUM_MAX   70.0f   // % umidade máxima para conforto
+
+// Calibração do sensor SHT40
+// O chip ESP32 gera calor e pode causar offset de +1 a +3°C no SHT40.
+// Meça a temperatura real com termômetro externo e ajuste este valor.
+// Exemplo: se o sensor lê 24°C mas a real é 22°C, use -2.0f
+#define TEMP_OFFSET  -1.5f  // °C a subtrair da leitura bruta
+
+// Intervalos de atualização
+#define WEATHER_UPDATE_INTERVAL_MS  (30UL * 60UL * 1000UL)  // 30 minutos entre buscas de clima
+#define SENSOR_UPDATE_INTERVAL_MS   5000UL                   // 5 segundos entre leituras do SHT40
+
+// Gerenciamento de energia — brilho do display
+#define BRIGHTNESS_ACTIVE   180   // brilho normal (0–255)
+#define BRIGHTNESS_DIM       30   // brilho mínimo após inatividade
+#define DIM_TIMEOUT_MS    60000   // 60 segundos sem toque → dim automático

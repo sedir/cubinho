@@ -1,0 +1,13 @@
+# Credenciais — nunca commitar
+src/config.h
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
