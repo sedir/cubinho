@@ -2,10 +2,10 @@
 
 Firmware para M5Stack CoreS3 fixado na porta da geladeira. Exibe em alternância (toque na tela):
 
-- **Tela 0** — Relógio + temperatura/umidade da cozinha (sensor SHT40 interno)
+- **Tela 0** — Relógio + timer regressivo de cozinha com alarme sonoro
 - **Tela 1** — Clima externo via API OpenMeteo (gratuita, sem cadastro)
 
-WiFi intermitente: conecta apenas a cada 30 minutos para buscar o clima e desliga em seguida — economiza ~100mA na maior parte do tempo.
+WiFi intermitente: conecta apenas a cada 30 minutos para buscar o clima e desliga em seguida. Deep sleep automático após inatividade — o sensor de proximidade LTR553 (embutido) acorda o display ao aproximar a mão.
 
 ---
 
@@ -61,36 +61,20 @@ Ou use os botões da extensão PlatformIO no VS Code (ícones ✓ → para compi
 
 ---
 
-## Calibração do sensor de temperatura
-
-O chip ESP32 gera calor internamente e pode elevar a leitura do SHT40 em **+1 a +3°C** dependendo da carga de trabalho e ventilação.
-
-Para calibrar:
-
-1. Deixe o dispositivo ligado por 15 minutos (estabilização térmica)
-2. Meça a temperatura real com um termômetro externo confiável
-3. Calcule o offset: `offset = leitura_real - leitura_sensor`
-4. Ajuste em `config.h`:
-
-```cpp
-#define TEMP_OFFSET  -1.5f   // exemplo: sensor lê 24°C, real é 22.5°C → offset -1.5
-```
-
----
-
 ## Estrutura do projeto
 
 ```
 src/
-├── main.cpp            — loop principal e inicialização
-├── config.h            — suas credenciais (não commitado)
-├── config.h.example    — template de configuração
-├── screen_home.h/.cpp  — tela 0: relógio + ambiente
+├── main.cpp              — loop principal, inicialização, LTR553
+├── config.h              — suas credenciais (não commitado)
+├── config.h.example      — template de configuração
+├── screen_home.h/.cpp    — tela 0: relógio + timer
 ├── screen_weather.h/.cpp — tela 1: clima externo
-├── battery_ui.h        — indicador de bateria (inline)
-├── power_manager.h/.cpp — dim automático por inatividade
-├── wifi_manager.h/.cpp — WiFi intermitente
-└── weather_api.h/.cpp  — cliente API OpenMeteo + parse JSON
+├── screen_splash.h       — tela de boot (inline)
+├── battery_ui.h          — indicador de bateria (inline)
+├── power_manager.h/.cpp  — dim + deep sleep por inatividade
+├── wifi_manager.h/.cpp   — WiFi intermitente + async state machine
+└── weather_api.h/.cpp    — cliente API OpenMeteo + parse JSON
 ```
 
 ---
@@ -98,7 +82,8 @@ src/
 ## Notas de hardware
 
 - **Bateria**: 900mAh interna, gerenciada pelo AXP2101 (acessível via `M5.Power`)
-- **Sensor SHT40**: I2C endereço `0x44`, integrado ao CoreS3
-- **Touch**: capacitivo FT6336U — toque suave é suficiente
+- **Proximidade**: LTR553 embutido (I2C `0x23`) — acorda o display do dim ao aproximar a mão; threshold ajustável via `LTR553_PROX_THRESH` em `config.h`
+- **Touch**: capacitivo FT6336U — acorda o dispositivo do deep sleep (INT no GPIO21)
 - **Display**: ILI9342C 320×240, landscape
 - **WiFi**: desligado entre as buscas para economizar energia
+- **Deep sleep**: ativa após `DEEP_SLEEP_TIMEOUT_MS` sem interação; wake por toque ou timer (atualização do clima)

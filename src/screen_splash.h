@@ -24,5 +24,5 @@ inline void drawSplash(lgfx::LovyanGFX& display) {
     // Rodapé
     display.setFont(&fonts::Font0);
     display.setTextColor(0x2104, TFT_BLACK);
-    display.drawString("M5Stack CoreS3", display.width() / 2, 210);
+    display.drawString("by Sedir Morais", display.width() / 2, 210);
 }

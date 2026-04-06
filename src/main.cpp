@@ -1,6 +1,5 @@
 #include <M5Unified.h>
 #include <esp_sleep.h>
-#include <sys/time.h>
 #include "config.h"
 #include "weather_api.h"
 #include "wifi_manager.h"
@@ -9,6 +8,25 @@
 #include "screen_weather.h"
 #include "screen_splash.h"
 
+// ── LTR553 — sensor de proximidade embutido (I2C interno 0x23) ───────────────
+#define LTR553_ADDR         0x23
+#define LTR553_PS_CONTR     0x81   // controle do PS: bits[1:0] 0x03 = active
+#define LTR553_PS_DATA_LOW  0x8D   // dado PS, byte baixo (bits 7:0)
+#define LTR553_PS_DATA_HIGH 0x8E   // dado PS, byte alto  (bits 2:0)
+#define LTR553_I2C_FREQ     400000
+
+static void ltr553Init() {
+    M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_PS_CONTR, 0x03, LTR553_I2C_FREQ);
+    delay(10);
+    Serial.println("[ltr553] Proximidade inicializada");
+}
+
+static uint16_t ltr553ReadProx() {
+    uint8_t lo = M5.In_I2C.readRegister8(LTR553_ADDR, LTR553_PS_DATA_LOW,  LTR553_I2C_FREQ);
+    uint8_t hi = M5.In_I2C.readRegister8(LTR553_ADDR, LTR553_PS_DATA_HIGH, LTR553_I2C_FREQ);
+    return ((uint16_t)(hi & 0x07) << 8) | lo;
+}
+
 // ── Estado persistido no RTC (sobrevive ao deep sleep) ───────────────────────
 RTC_DATA_ATTR static uint8_t     rtcBootCount   = 0;      // 0 = cold boot
 RTC_DATA_ATTR static int         rtcScreen      = 0;
@@ -16,7 +34,6 @@ RTC_DATA_ATTR static WeatherData rtcWeather     = {};
 RTC_DATA_ATTR static int         rtcTimerState  = 0;      // 0=SETTING, 2=PAUSED
 RTC_DATA_ATTR static int         rtcTimerPreset = 2;
 RTC_DATA_ATTR static uint32_t    rtcTimerRemain = 5 * 60000;
-RTC_DATA_ATTR static time_t      rtcSavedTime   = 0;      // hora salva antes do deep sleep
 
 // ── Estado volátil (loop) ────────────────────────────────────────────────────
 static int         currentScreen = 0;
@@ -69,23 +86,20 @@ void setup() {
     M5.Speaker.setVolume(200);
 
     // Restaura timezone. No cold boot: configTime() completo (inicia SNTP).
+    // No wake: apenas setenv+tzset — NÃO reinicializa o SNTP para não apagar
+    // o sync do relógio preservado no RTC durante o deep sleep.
     if (isColdBoot) {
         configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     } else {
-        // Restaura timezone e exibe hora aproximada enquanto NTP sincroniza async.
         int h = TIMEZONE_OFFSET_SEC / 3600;
         char tz[16];
         snprintf(tz, sizeof(tz), "UTC%+d", -h);
         setenv("TZ", tz, 1);
         tzset();
-        if (rtcSavedTime > 1577836800L) {
-            struct timeval tv = { .tv_sec = rtcSavedTime, .tv_usec = 0 };
-            settimeofday(&tv, nullptr);
-            Serial.printf("[main] Hora provisória restaurada: %ld\n", (long)rtcSavedTime);
-        }
     }
 
     initSprite();
+    ltr553Init();
     powerInit();
     screenHomeInit();
 
@@ -97,7 +111,6 @@ void setup() {
         wifiConnectAndFetch(weatherData);
         rtcWeather = weatherData;
         rtcBootCount++;
-        rtcSavedTime = time(nullptr);
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -107,12 +120,11 @@ void setup() {
     weatherData   = rtcWeather;
 
     if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
-        // Restaura estado do timer e inicia NTP + clima de forma assíncrona.
-        // A hora provisória já foi restaurada acima via settimeofday.
-        Serial.println("[main] Wake por toque — iniciando NTP async");
+        // Restaura estado do timer sem re-inicializar tudo
+        Serial.println("[main] Wake por toque — restaurando estado");
         TimerPersist tp = { rtcTimerState, rtcTimerPreset, rtcTimerRemain };
         screenHomeSetTimerPersist(tp);
-        wifiBeginAsync(weatherData);  // não bloqueia; progride via wifiScheduleUpdate()
+        wifiBeginAsync(weatherData);  // inicia busca do clima após wake
     } else {
         // Cold boot: splash + init completo
         Serial.println("[main] Boot inicial");
@@ -165,6 +177,16 @@ void loop() {
         }
     }
 
+    // ── Proximidade — acorda do dim sem precisar tocar ───────────────────────
+    static uint32_t lastProxMs = 0;
+    if (powerIsDim() && (millis() - lastProxMs >= 100)) {
+        lastProxMs = millis();
+        if (ltr553ReadProx() > LTR553_PROX_THRESH) {
+            powerOnTouch();
+            needsRedraw = true;
+        }
+    }
+
     // ── Dim por inatividade ───────────────────────────────────────────────────
     bool wasDim = powerIsDim();
     powerUpdate();
@@ -188,7 +210,6 @@ void loop() {
         rtcTimerRemain = tp.remainMs;
 
         rtcBootCount++;
-        rtcSavedTime = time(nullptr);
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -228,7 +249,7 @@ void loop() {
     bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400 : 1000));
     if (needsRedraw || timeToRefresh) {
         if (currentScreen == 0) {
-            screenHomeDraw(*fb, wifiIsFetching());
+            screenHomeDraw(*fb);
         } else {
             screenWeatherDraw(*fb, weatherData, wifiIsFetching());
         }
