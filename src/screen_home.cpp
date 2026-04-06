@@ -112,7 +112,7 @@ static void drawRightArrow(lgfx::LovyanGFX& display, int cx, int cy, uint16_t co
 }
 
 // ── Desenho da tela ──────────────────────────────────────────────────────────
-void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing) {
+void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
     display.fillScreen(TFT_BLACK);
 
     // --- Data + bateria ---
@@ -140,8 +140,10 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing) {
     display.setTextDatum(MC_DATUM);
     if (timeOk) {
         char timeBuf[12];
-        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
-                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        if (isDim) snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:--",
+                            timeinfo.tm_hour, timeinfo.tm_min);
+        else       snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
+                            timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
         display.drawString(timeBuf, display.width() / 2, 85);
     } else {
         display.drawString("--:--:--", display.width() / 2, 85);

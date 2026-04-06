@@ -123,6 +123,21 @@ static uint16_t tempColor(float t) {
     return TFT_GREEN;
 }
 
+// Desenha "prefixo + valor + °C" com ° como círculo primitivo (FreeSans não tem o glifo).
+// Retorna o x após o texto desenhado.
+static int drawTempC(lgfx::LovyanGFX& d, const char* prefix, float val, int decimals,
+                     int x, int y, uint16_t color) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), decimals ? "%s%.1f" : "%s%.0f", prefix, val);
+    d.setTextColor(color, TFT_BLACK);
+    d.setTextDatum(TL_DATUM);
+    d.drawString(buf, x, y);
+    int x2 = x + d.textWidth(buf);
+    d.drawCircle(x2 + 3, y + 3, 2, color);   // símbolo °
+    d.drawString("C", x2 + 7, y);
+    return x2 + 7 + d.textWidth("C");
+}
+
 // ── Gráfico de barras das próximas 6h ────────────────────────────────────────
 static void drawHourlyForecast(lgfx::LovyanGFX& display, const WeatherData& data) {
     // 6 barras de 36px com gap de 6px, centralizadas em 320px
@@ -210,10 +225,8 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
 
     // --- Temperatura atual + tendência ---
     char buf[48];
-    snprintf(buf, sizeof(buf), "Atual: %.1f\xC2\xB0""C", data.tempCurrent);
-    display.setTextColor(tempColor(data.tempCurrent), TFT_BLACK);
-    display.setTextDatum(TL_DATUM);
-    display.drawString(buf, 16, 102);
+    int afterTemp = drawTempC(display, "Atual: ", data.tempCurrent, 1, 16, 102,
+                              tempColor(data.tempCurrent));
 
     // Tendência: delta em relação à busca anterior
     if (!isnan(data.tempPrevious)) {
@@ -224,16 +237,13 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
             display.setFont(&fonts::Font0);
             display.setTextColor(col, TFT_BLACK);
             display.setTextDatum(TL_DATUM);
-            // Posiciona após o texto de temperatura (~140px de largura)
-            display.drawString(buf, 158, 106);
+            display.drawString(buf, afterTemp + 4, 106);
             display.setFont(&fonts::FreeSans9pt7b);
         }
     }
 
-    snprintf(buf, sizeof(buf), "Max: %.0f\xC2\xB0""C  Min: %.0f\xC2\xB0""C",
-             data.tempMax, data.tempMin);
-    display.setTextColor(TFT_WHITE, TFT_BLACK);
-    display.drawString(buf, 16, 120);
+    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, 16, 120, TFT_WHITE);
+    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 120, TFT_WHITE);
 
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
     display.setTextColor(0x5D9F, TFT_BLACK);

@@ -53,6 +53,31 @@ static bool     alarmWasActive  = false;
 static uint32_t lastBeepMs      = 0;
 static uint8_t  lastDimMinute   = 255;  // controla refresh do relógio no dim
 
+// ── Orientação via acelerômetro ───────────────────────────────────────────────
+// Detecta rotação 180° em landscape usando eixo X do acelerômetro.
+// ax > +0.4 → rotation 1 (normal); ax < -0.4 → rotation 3 (invertido).
+static int      currentRotation  = 1;
+static uint32_t lastImuMs        = 0;
+
+static void updateOrientation() {
+    if (millis() - lastImuMs < 500) return;
+    lastImuMs = millis();
+
+    float ax, ay, az;
+    if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+
+    int newRot = currentRotation;
+    if      (ay >  0.4f) newRot = 1;
+    else if (ay < -0.4f) newRot = 3;
+
+    if (newRot != currentRotation) {
+        currentRotation = newRot;
+        M5.Display.setRotation(newRot);
+        needsRedraw = true;
+        Serial.printf("[imu] Rotacao -> %d (ay=%.2f)\n", newRot, ay);
+    }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 static void initSprite() {
     canvas = new LGFX_Sprite(&M5.Display);
@@ -189,10 +214,13 @@ void loop() {
         }
     }
 
+    // ── Orientação (acelerômetro) — apenas quando ativo ─────────────────────────
+    if (!powerIsDim()) updateOrientation();
+
     // ── Dim por inatividade ───────────────────────────────────────────────────
     bool wasDim = powerIsDim();
     powerUpdate();
-    if (wasDim && !powerIsDim()) needsRedraw = true;
+    if (wasDim != powerIsDim()) needsRedraw = true;  // transição em qualquer direção
 
     // ── WiFi / clima ─────────────────────────────────────────────────────────
     wifiScheduleUpdate(weatherData);
@@ -250,7 +278,7 @@ void loop() {
     bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400 : 1000));
     if (needsRedraw || timeToRefresh) {
         if (currentScreen == 0) {
-            screenHomeDraw(*fb);
+            screenHomeDraw(*fb, wifiIsFetching(), powerIsDim());
         } else {
             screenWeatherDraw(*fb, weatherData, wifiIsFetching());
         }
