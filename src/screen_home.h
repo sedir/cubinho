@@ -14,6 +14,9 @@ bool screenHomeIsAlarmActive();
 // Deep sleep — retorna true se o timer está rodando ou pausado (bloqueia sleep)
 bool screenHomeIsTimerActive();
 
+// Retorna true se o timer está especificamente no estado RUNNING
+bool screenHomeIsTimerRunning();
+
 // Persistência do estado do timer através do deep sleep
 struct TimerPersist {
     int      state;      // 0=SETTING, 2=PAUSED (RUNNING→PAUSED, DONE→SETTING)

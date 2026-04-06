@@ -7,6 +7,7 @@
 #include "screen_home.h"
 #include "screen_weather.h"
 #include "screen_splash.h"
+#include "led_strip.h"
 
 // ── LTR553 — sensor de proximidade embutido (I2C interno 0x23) ───────────────
 #define LTR553_ADDR         0x23
@@ -126,6 +127,7 @@ void setup() {
 
     initSprite();
     ltr553Init();
+    ledInit();
     powerInit();
     screenHomeInit();
 
@@ -239,6 +241,7 @@ void loop() {
         rtcTimerPreset = tp.presetIdx;
         rtcTimerRemain = tp.remainMs;
 
+        ledOff();
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -271,6 +274,9 @@ void loop() {
         }
     }
     if (!powerIsDim()) lastDimMinute = 255;  // reseta ao sair do dim
+
+    // ── LEDs ─────────────────────────────────────────────────────────────────
+    ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
 
     if (powerIsDim() && !needsRedraw) { delay(100); return; }
 

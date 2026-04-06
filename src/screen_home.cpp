@@ -76,6 +76,10 @@ bool screenHomeIsTimerActive() {
     return timerState == TIMER_RUNNING || timerState == TIMER_PAUSED;
 }
 
+bool screenHomeIsTimerRunning() {
+    return timerState == TIMER_RUNNING;
+}
+
 TimerPersist screenHomeGetTimerPersist() {
     // RUNNING é salvo como PAUSED; presetIdx reutilizado para armazenar timerMinutes
     int s = (timerState == TIMER_PAUSED) ? 2 : 0;
