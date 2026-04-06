@@ -135,7 +135,7 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
     drawBatteryIndicator(display);
 
     // --- Hora grande ---
-    display.setFont(&fonts::FreeSansBold18pt7b);
+    display.setFont(&fonts::FreeSansBold24pt7b);
     display.setTextColor(0xFD20, TFT_BLACK);
     display.setTextDatum(MC_DATUM);
     if (timeOk) {
@@ -144,9 +144,9 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
                             timeinfo.tm_hour, timeinfo.tm_min);
         else       snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d",
                             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        display.drawString(timeBuf, display.width() / 2, 85);
+        display.drawString(timeBuf, display.width() / 2, 76);
     } else {
-        display.drawString("--:--:--", display.width() / 2, 85);
+        display.drawString("--:--:--", display.width() / 2, 76);
     }
 
     // --- Indicador de sincronização NTP ---

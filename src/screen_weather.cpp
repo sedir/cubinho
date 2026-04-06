@@ -225,7 +225,7 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
 
     // --- Temperatura atual + tendência ---
     char buf[48];
-    int afterTemp = drawTempC(display, "Atual: ", data.tempCurrent, 1, 16, 102,
+    int afterTemp = drawTempC(display, "Atual: ", data.tempCurrent, 1, 16, 96,
                               tempColor(data.tempCurrent));
 
     // Tendência: delta em relação à busca anterior
@@ -237,17 +237,17 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
             display.setFont(&fonts::Font0);
             display.setTextColor(col, TFT_BLACK);
             display.setTextDatum(TL_DATUM);
-            display.drawString(buf, afterTemp + 4, 106);
+            display.drawString(buf, afterTemp + 4, 100);
             display.setFont(&fonts::FreeSans9pt7b);
         }
     }
 
-    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, 16, 120, TFT_WHITE);
-    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 120, TFT_WHITE);
+    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, 16, 114, TFT_WHITE);
+    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 114, TFT_WHITE);
 
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
     display.setTextColor(0x5D9F, TFT_BLACK);
-    display.drawString(buf, 16, 138);
+    display.drawString(buf, 16, 132);
 
     display.drawFastHLine(10, 152, display.width() - 20, 0x4208);
 
