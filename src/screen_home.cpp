@@ -7,17 +7,11 @@ static const char* DIAS[]  = { "dom", "seg", "ter", "qua", "qui", "sex", "sab" }
 static const char* MESES[] = { "jan", "fev", "mar", "abr", "mai", "jun",
                                 "jul", "ago", "set", "out", "nov", "dez" };
 
-// ── Presets do timer ─────────────────────────────────────────────────────────
-static const uint32_t PRESETS_MS[]    = { 60000, 3*60000, 5*60000, 10*60000,
-                                          15*60000, 20*60000, 30*60000 };
-static const char*    PRESET_LABELS[] = { "1", "3", "5", "10", "15", "20", "30" };
-static const int      NUM_PRESETS     = 7;
-
 // ── Estado do timer ──────────────────────────────────────────────────────────
 enum TimerState { TIMER_SETTING, TIMER_RUNNING, TIMER_PAUSED, TIMER_DONE };
 
 static TimerState timerState    = TIMER_SETTING;
-static int        presetIdx     = 2;           // default: 5 min
+static int        timerMinutes  = 5;           // 1–99 min, editável por toque
 static uint32_t   timerRemainMs = 5 * 60000;  // tempo restante (snapshot ao pausar)
 static uint32_t   timerStartMs  = 0;           // millis() no último início/resume
 
@@ -29,12 +23,13 @@ static uint32_t getRemaining() {
 }
 
 // ── API de controle ──────────────────────────────────────────────────────────
-void screenHomeTimerTap() {
+void screenHomeTimerTap(int tapX) {
     switch (timerState) {
         case TIMER_SETTING:
-            presetIdx     = (presetIdx + 1) % NUM_PRESETS;
-            timerRemainMs = PRESETS_MS[presetIdx];
-            M5.Speaker.tone(1200, 30);
+            if (tapX < 160) timerMinutes = max(1,  timerMinutes - 1);
+            else             timerMinutes = min(99, timerMinutes + 1);
+            timerRemainMs = (uint32_t)timerMinutes * 60000;
+            M5.Speaker.tone(800, 20);
             break;
         case TIMER_RUNNING:
             timerRemainMs = getRemaining();
@@ -46,7 +41,7 @@ void screenHomeTimerTap() {
             break;
         case TIMER_DONE:
             timerState    = TIMER_SETTING;
-            timerRemainMs = PRESETS_MS[presetIdx];
+            timerRemainMs = (uint32_t)timerMinutes * 60000;
             break;
     }
 }
@@ -56,12 +51,14 @@ void screenHomeTimerLongPress() {
         case TIMER_SETTING:
             timerStartMs = millis();
             timerState   = TIMER_RUNNING;
+            M5.Speaker.tone(440, 60);
+            M5.Speaker.tone(660, 100);
             break;
         case TIMER_RUNNING:
         case TIMER_PAUSED:
         case TIMER_DONE:
             timerState    = TIMER_SETTING;
-            timerRemainMs = PRESETS_MS[presetIdx];
+            timerRemainMs = (uint32_t)timerMinutes * 60000;
             break;
     }
 }
@@ -71,7 +68,7 @@ bool screenHomeIsAlarmActive() {
 }
 
 bool screenHomeInit() {
-    timerRemainMs = PRESETS_MS[presetIdx];
+    timerRemainMs = (uint32_t)timerMinutes * 60000;
     return true;
 }
 
@@ -80,20 +77,19 @@ bool screenHomeIsTimerActive() {
 }
 
 TimerPersist screenHomeGetTimerPersist() {
-    // RUNNING é salvo como PAUSED (não poderia dormir com timer ativo,
-    // mas por segurança preserva o tempo restante)
+    // RUNNING é salvo como PAUSED; presetIdx reutilizado para armazenar timerMinutes
     int s = (timerState == TIMER_PAUSED) ? 2 : 0;
-    return { s, presetIdx, getRemaining() };
+    return { s, timerMinutes, getRemaining() };
 }
 
 void screenHomeSetTimerPersist(const TimerPersist& p) {
-    presetIdx = p.presetIdx;
+    timerMinutes = (p.presetIdx >= 1 && p.presetIdx <= 99) ? p.presetIdx : 5;
     if (p.state == 2 && p.remainMs > 0) {  // PAUSED
         timerState    = TIMER_PAUSED;
         timerRemainMs = p.remainMs;
     } else {
         timerState    = TIMER_SETTING;
-        timerRemainMs = PRESETS_MS[presetIdx];
+        timerRemainMs = (uint32_t)timerMinutes * 60000;
     }
 }
 
@@ -105,6 +101,14 @@ static void drawPlayIcon(lgfx::LovyanGFX& display, int cx, int cy, uint16_t colo
 static void drawPauseIcon(lgfx::LovyanGFX& display, int cx, int cy, uint16_t color) {
     display.fillRect(cx - 7, cy - 9, 5, 18, color);
     display.fillRect(cx + 2, cy - 9, 5, 18, color);
+}
+
+static void drawLeftArrow(lgfx::LovyanGFX& display, int cx, int cy, uint16_t color) {
+    display.fillTriangle(cx + 7, cy - 8, cx + 7, cy + 8, cx - 7, cy, color);
+}
+
+static void drawRightArrow(lgfx::LovyanGFX& display, int cx, int cy, uint16_t color) {
+    display.fillTriangle(cx - 7, cy - 8, cx - 7, cy + 8, cx + 7, cy, color);
 }
 
 // ── Desenho da tela ──────────────────────────────────────────────────────────
@@ -177,18 +181,21 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing) {
             return;  // redesenha na próxima iteração como DONE
         }
 
-        uint32_t mins = remaining / 60000;
-        uint32_t secs = (remaining / 1000) % 60;
-
         // Cor indica estado
         uint16_t timerColor;
         if (timerState == TIMER_RUNNING)     timerColor = TFT_GREEN;
         else if (timerState == TIMER_PAUSED) timerColor = TFT_WHITE;
         else                                  timerColor = 0x8410;  // setting: cinza
 
-        // Dígitos do timer
-        char tBuf[8];
-        snprintf(tBuf, sizeof(tBuf), "%02lu:%02lu", mins, secs);
+        // Dígitos do timer: "X min" em SETTING, "MM:SS" durante contagem
+        char tBuf[12];
+        if (timerState == TIMER_SETTING) {
+            snprintf(tBuf, sizeof(tBuf), "%d min", timerMinutes);
+        } else {
+            uint32_t mins = remaining / 60000;
+            uint32_t secs = (remaining / 1000) % 60;
+            snprintf(tBuf, sizeof(tBuf), "%02lu:%02lu", mins, secs);
+        }
         display.setFont(&fonts::FreeSansBold18pt7b);
         display.setTextColor(timerColor, TFT_BLACK);
         display.setTextDatum(MC_DATUM);
@@ -203,31 +210,14 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing) {
             drawPlayIcon(display, iconX, iconY, timerColor);
         }
 
-        // Linha de presets (só no estado SETTING)
         if (timerState == TIMER_SETTING) {
-            display.setFont(&fonts::FreeSans9pt7b);
-
-            // Calcula largura total para centralizar
-            int totalW = 0;
-            for (int i = 0; i < NUM_PRESETS; i++) {
-                totalW += display.textWidth(PRESET_LABELS[i]) + 14;
-            }
-            int px = (display.width() - totalW + 14) / 2;
-            int py = 182;
-
-            for (int i = 0; i < NUM_PRESETS; i++) {
-                uint16_t col = (i == presetIdx) ? TFT_WHITE : (uint16_t)0x4208;
-                display.setTextColor(col, TFT_BLACK);
-                display.setTextDatum(TL_DATUM);
-                display.drawString(PRESET_LABELS[i], px, py);
-                px += display.textWidth(PRESET_LABELS[i]) + 14;
-            }
-
+            // Setas laterais indicam toque esquerdo/direito para -/+ 1 min
+            drawLeftArrow(display,  28, 152, 0x4208);
+            drawRightArrow(display, display.width() - 28, 152, 0x4208);
             display.setFont(&fonts::FreeSans9pt7b);
             display.setTextColor(0x4208, TFT_BLACK);
             display.setTextDatum(MC_DATUM);
             display.drawString("Segurar: iniciar", display.width() / 2, 210);
-
         } else if (timerState == TIMER_PAUSED) {
             display.setFont(&fonts::FreeSans9pt7b);
             display.setTextColor(0x4208, TFT_BLACK);

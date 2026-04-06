@@ -5,7 +5,7 @@ bool screenHomeInit();
 void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing = false);
 
 // Chamados pelo handler de toque em main.cpp
-void screenHomeTimerTap();        // toque curto na zona do timer
+void screenHomeTimerTap(int tapX); // toque curto na zona do timer (tapX decide -/+)
 void screenHomeTimerLongPress();  // pressão longa na zona do timer
 
 // Sinaliza para o main.cpp disparar o som do alarme

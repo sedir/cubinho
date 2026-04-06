@@ -45,6 +45,7 @@ static LGFX_Sprite*     canvas = nullptr;
 static lgfx::LovyanGFX* fb     = nullptr;
 
 static bool     touchStartedInDim = false;
+static int      touchStartX       = 0;
 static int      touchStartY       = 0;
 static uint32_t touchStartMs      = 0;
 
@@ -83,7 +84,7 @@ void setup() {
     auto cfg = M5.config();
     cfg.serial_baudrate = 115200;
     M5.begin(cfg);
-    M5.Speaker.setVolume(200);
+    M5.Speaker.setVolume(140);
 
     // Restaura timezone. No cold boot: configTime() completo (inicia SNTP).
     // No wake: apenas setenv+tzset — NÃO reinicializa o SNTP para não apagar
@@ -148,6 +149,7 @@ void loop() {
 
     if (touch.wasPressed()) {
         touchStartedInDim = powerIsDim();
+        touchStartX       = touch.x;
         touchStartY       = touch.y;
         touchStartMs      = millis();
         powerOnTouch();
@@ -159,14 +161,14 @@ void loop() {
         bool     longPress = (held >= 800);
 
         if (currentScreen == 0 && screenHomeIsAlarmActive()) {
-            screenHomeTimerTap();
+            screenHomeTimerTap(touchStartX);
             needsRedraw = true;
         } else if (currentScreen == 0 && touchStartY >= 118) {
             if (longPress) {
                 screenHomeTimerLongPress();
                 Serial.println("[main] Timer: long press");
             } else {
-                screenHomeTimerTap();
+                screenHomeTimerTap(touchStartX);
                 Serial.println("[main] Timer: tap");
             }
             needsRedraw = true;
@@ -218,9 +220,9 @@ void loop() {
     if (alarmActive) {
         uint32_t now = millis();
         if (now - lastBeepMs >= 1800) {
-            M5.Speaker.tone(880,  150);
-            M5.Speaker.tone(1100, 150);
-            M5.Speaker.tone(1320, 400);
+            M5.Speaker.tone(523, 200);   // C5
+            M5.Speaker.tone(659, 200);   // E5
+            M5.Speaker.tone(784, 500);   // G5 — acorde maior, suave
             lastBeepMs = now;
         }
         if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0)) {

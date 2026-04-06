@@ -19,20 +19,23 @@ const char* wmoToDescription(int code) {
 
 
 bool weatherFetch(WeatherData& out) {
-    // Monta URL da API OpenMeteo — HTTP sem autenticação
-    // snprintf evita fragmentação de heap causada por String + concatenação
-    char url[256];
+    // Guarda temperatura anterior para calcular tendência
+    float prevTemp = out.valid ? out.tempCurrent : NAN;
+
+    // Monta URL — snprintf evita fragmentação de heap
+    char url[300];
     snprintf(url, sizeof(url),
         "http://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+        "&hourly=temperature_2m,weather_code"
         "&timezone=Asia%%2FTokyo&forecast_days=1",
         GEO_LATITUDE, GEO_LONGITUDE);
 
     HTTPClient http;
     http.begin(url);
-    http.setTimeout(8000);  // 8 segundos de timeout
+    http.setTimeout(8000);
 
     int httpCode = http.GET();
     if (httpCode != 200) {
@@ -41,49 +44,57 @@ bool weatherFetch(WeatherData& out) {
         return false;
     }
 
-    // Lê resposta completa como String — mais confiável que stream no ESP32
     String payload = http.getString();
     http.end();
 
-    // Parse do JSON — usa filtro para economizar RAM
-    // Nota: OpenMeteo usa "weather_code" (com underscore) na resposta JSON
+    // Filtro para economizar RAM no JsonDocument
     JsonDocument filter;
     filter["current"]["temperature_2m"] = true;
     filter["current"]["relative_humidity_2m"] = true;
     filter["current"]["weather_code"] = true;
     filter["daily"]["temperature_2m_max"][0] = true;
     filter["daily"]["temperature_2m_min"][0] = true;
+    filter["hourly"]["temperature_2m"][0] = true;
+    filter["hourly"]["weather_code"][0] = true;
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload,
                                                DeserializationOption::Filter(filter));
-
     if (err) {
         Serial.printf("[weather] JSON erro: %s\n", err.c_str());
         return false;
     }
 
-    // Preenche struct com os dados recebidos
-    out.tempCurrent = doc["current"]["temperature_2m"].as<float>();
-    out.humidity    = doc["current"]["relative_humidity_2m"].as<float>();
-    out.weatherCode = doc["current"]["weather_code"].as<int>();
-    out.tempMax     = doc["daily"]["temperature_2m_max"][0].as<float>();
-    out.tempMin     = doc["daily"]["temperature_2m_min"][0].as<float>();
-    out.valid       = true;
+    // Dados atuais e diários
+    out.tempPrevious = prevTemp;
+    out.tempCurrent  = doc["current"]["temperature_2m"].as<float>();
+    out.humidity     = doc["current"]["relative_humidity_2m"].as<float>();
+    out.weatherCode  = doc["current"]["weather_code"].as<int>();
+    out.tempMax      = doc["daily"]["temperature_2m_max"][0].as<float>();
+    out.tempMin      = doc["daily"]["temperature_2m_min"][0].as<float>();
+    out.valid        = true;
 
     strncpy(out.description, wmoToDescription(out.weatherCode), sizeof(out.description) - 1);
     out.description[sizeof(out.description) - 1] = '\0';
 
-    // Registra horário da última atualização
+    // Previsão horária — próximas 6h a partir da hora atual
     struct tm timeinfo;
+    int startHour = 0;
     if (getLocalTime(&timeinfo)) {
+        startHour = timeinfo.tm_hour;
         snprintf(out.lastUpdated, sizeof(out.lastUpdated), "%02d:%02d",
                  timeinfo.tm_hour, timeinfo.tm_min);
     } else {
         strncpy(out.lastUpdated, "--:--", sizeof(out.lastUpdated));
     }
+    out.hourlyStartHour = startHour;
+    for (int i = 0; i < 6; i++) {
+        int idx = min(startHour + i, 23);  // clipa em 23h no fim do dia
+        out.hourlyTemp[i] = doc["hourly"]["temperature_2m"][idx].as<float>();
+        out.hourlyCode[i] = doc["hourly"]["weather_code"][idx].as<int>();
+    }
 
-    Serial.printf("[weather] OK — %.1f°C, WMO:%d, %s\n",
-                  out.tempCurrent, out.weatherCode, out.description);
+    Serial.printf("[weather] OK — %.1f°C (prev %.1f°C), WMO:%d\n",
+                  out.tempCurrent, out.tempPrevious, out.weatherCode);
     return true;
 }

@@ -116,17 +116,67 @@ static void drawWeatherIcon(lgfx::LovyanGFX& display, int code, int cx, int cy) 
     }
 }
 
+// ── Cor de temperatura baseada no conforto ────────────────────────────────────
+static uint16_t tempColor(float t) {
+    if (t < COMFORT_TEMP_MIN) return 0x001F;   // azul = frio
+    if (t > COMFORT_TEMP_MAX) return TFT_RED;  // vermelho = quente
+    return TFT_GREEN;
+}
+
+// ── Gráfico de barras das próximas 6h ────────────────────────────────────────
+static void drawHourlyForecast(lgfx::LovyanGFX& display, const WeatherData& data) {
+    // 6 barras de 36px com gap de 6px, centralizadas em 320px
+    const int BAR_W   = 36;
+    const int GAP     = 6;
+    const int BAR_MAX = 18;    // altura máxima em pixels
+    const int BAR_MIN = 4;     // altura mínima em pixels
+    const int BASE_Y  = 188;   // base das barras
+    const int START_X = (display.width() - (6 * BAR_W + 5 * GAP)) / 2;
+
+    // Escala: min/max das 6 temperaturas (range mínimo de 4°C)
+    float tmin = data.hourlyTemp[0], tmax = data.hourlyTemp[0];
+    for (int i = 1; i < 6; i++) {
+        if (data.hourlyTemp[i] < tmin) tmin = data.hourlyTemp[i];
+        if (data.hourlyTemp[i] > tmax) tmax = data.hourlyTemp[i];
+    }
+    float range = (tmax - tmin < 4.0f) ? 4.0f : (tmax - tmin);
+
+    for (int i = 0; i < 6; i++) {
+        int x   = START_X + i * (BAR_W + GAP);
+        int cx  = x + BAR_W / 2;
+        int barH = BAR_MIN + (int)((data.hourlyTemp[i] - tmin) / range * (BAR_MAX - BAR_MIN));
+        int barY = BASE_Y - barH;
+
+        // Barra colorida por temperatura
+        display.fillRect(x, barY, BAR_W, barH, tempColor(data.hourlyTemp[i]));
+
+        // Temperatura acima da barra (Font0 = 6×8px)
+        char tbuf[6];
+        snprintf(tbuf, sizeof(tbuf), "%.0f", data.hourlyTemp[i]);
+        display.setFont(&fonts::Font0);
+        display.setTextColor(TFT_WHITE, TFT_BLACK);
+        display.setTextDatum(BC_DATUM);
+        display.drawString(tbuf, cx, barY - 1);
+
+        // Hora abaixo da barra
+        char hbuf[5];
+        snprintf(hbuf, sizeof(hbuf), "%dh", (data.hourlyStartHour + i) % 24);
+        display.setTextDatum(TC_DATUM);
+        display.setTextColor(0x8410, TFT_BLACK);
+        display.drawString(hbuf, cx, BASE_Y + 2);
+    }
+}
+
 // ── Desenho da tela de clima ─────────────────────────────────────────────────
 void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool fetching) {
     display.fillScreen(TFT_BLACK);
 
-    // --- Linha 1: Cidade + bateria ---
+    // --- Cidade + bateria ---
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(0x8410, TFT_BLACK);
     display.setTextDatum(TL_DATUM);
     display.drawString(CITY_NAME, 6, 4);
 
-    // Ícone de sincronização piscante durante busca
     if (fetching && (millis() / 400) % 2 == 0) {
         display.setTextColor(0xFD20, TFT_BLACK);
         display.setTextDatum(TR_DATUM);
@@ -141,7 +191,6 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
         display.setTextDatum(MC_DATUM);
         display.drawString("Sem conexao", display.width() / 2, 100);
         display.drawString("Aguardando WiFi...", display.width() / 2, 125);
-
         int cx = display.width() / 2;
         int cy = display.height() - 12;
         display.drawCircle(cx - 10, cy, 4, 0x8410);
@@ -149,48 +198,59 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
         return;
     }
 
-    // --- Ícone do clima (desenhado com primitivas) ---
-    drawWeatherIcon(display, data.weatherCode, display.width() / 2, 52);
+    // --- Ícone + descrição ---
+    drawWeatherIcon(display, data.weatherCode, display.width() / 2, 46);
 
-    // --- Descrição textual ---
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(TFT_WHITE, TFT_BLACK);
     display.setTextDatum(MC_DATUM);
-    display.drawString(data.description, display.width() / 2, 84);
+    display.drawString(data.description, display.width() / 2, 76);
 
-    // --- Divisor ---
-    display.drawFastHLine(10, 100, display.width() - 20, 0x4208);
+    display.drawFastHLine(10, 90, display.width() - 20, 0x4208);
 
-    // --- Dados numéricos ---
-    display.setTextDatum(TL_DATUM);
-    char buf[40];
-
-    // Temperatura atual com cor baseada no conforto
-    uint16_t tempColor;
-    if (data.tempCurrent < COMFORT_TEMP_MIN)       tempColor = 0x001F;
-    else if (data.tempCurrent > COMFORT_TEMP_MAX)  tempColor = TFT_RED;
-    else                                            tempColor = TFT_GREEN;
-
+    // --- Temperatura atual + tendência ---
+    char buf[48];
     snprintf(buf, sizeof(buf), "Atual: %.1f\xC2\xB0""C", data.tempCurrent);
-    display.setTextColor(tempColor, TFT_BLACK);
-    display.drawString(buf, 16, 112);
+    display.setTextColor(tempColor(data.tempCurrent), TFT_BLACK);
+    display.setTextDatum(TL_DATUM);
+    display.drawString(buf, 16, 102);
+
+    // Tendência: delta em relação à busca anterior
+    if (!isnan(data.tempPrevious)) {
+        float delta = data.tempCurrent - data.tempPrevious;
+        if (delta > 0.2f || delta < -0.2f) {
+            snprintf(buf, sizeof(buf), "%+.1f", delta);
+            uint16_t col = (delta > 0) ? TFT_RED : 0x001F;
+            display.setFont(&fonts::Font0);
+            display.setTextColor(col, TFT_BLACK);
+            display.setTextDatum(TL_DATUM);
+            // Posiciona após o texto de temperatura (~140px de largura)
+            display.drawString(buf, 158, 106);
+            display.setFont(&fonts::FreeSans9pt7b);
+        }
+    }
 
     snprintf(buf, sizeof(buf), "Max: %.0f\xC2\xB0""C  Min: %.0f\xC2\xB0""C",
              data.tempMax, data.tempMin);
     display.setTextColor(TFT_WHITE, TFT_BLACK);
-    display.drawString(buf, 16, 138);
+    display.drawString(buf, 16, 120);
 
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
     display.setTextColor(0x5D9F, TFT_BLACK);
-    display.drawString(buf, 16, 162);
+    display.drawString(buf, 16, 138);
 
-    // --- Aviso de bateria crítica (piscante) ---
+    display.drawFastHLine(10, 152, display.width() - 20, 0x4208);
+
+    // --- Previsão horária (próximas 6h) ---
+    drawHourlyForecast(display, data);
+
+    // --- Aviso de bateria crítica ---
     int pct = batteryPercent();
     if (pct >= 0 && pct <= 5 && (millis() / 1000) % 2 == 0) {
         display.setFont(&fonts::FreeSans9pt7b);
         display.setTextColor(TFT_RED, TFT_BLACK);
         display.setTextDatum(MC_DATUM);
-        display.drawString("BATERIA BAIXA!", display.width() / 2, 190);
+        display.drawString("BATERIA BAIXA!", display.width() / 2, 210);
     }
 
     // --- Timestamp + indicador de tela ---
