@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "config.h"
+#include "logger.h"
 #include <WiFi.h>
 #include <time.h>
 
@@ -10,14 +11,19 @@ static AsyncState   _state        = ASYNC_IDLE;
 static WeatherData* _asyncOut     = nullptr;
 static uint32_t     _asyncStartMs = 0;
 static bool         _firstFetch   = true;
+static bool         _keepAlive    = false;
 
 static uint32_t _lastFetchMs = 0;
 
 // ── Helpers internos ──────────────────────────────────────────────────────────
 static void wifiOff() {
+    if (_keepAlive) {
+        LOG_I("wifi", "WiFi mantido ativo (cliente Telnet conectado)");
+        return;
+    }
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
-    Serial.println("[wifi] WiFi OFF");
+    LOG_I("wifi", "WiFi OFF");
 }
 
 // Conclui a operação async: busca clima, desliga WiFi, arma próximo ciclo.
@@ -37,22 +43,21 @@ static void pollAsync() {
 
         case ASYNC_CONNECTING:
             if (WiFi.status() == WL_CONNECTED) {
-                // Só reinicia o SNTP se o RTC ainda não estiver sincronizado.
-                // Após wake do deep sleep o RTC é válido — forçar configTime()
-                // reinicia o SNTP e pode causar falha temporária em getLocalTime().
                 struct tm _tmcheck;
                 bool timeValid = getLocalTime(&_tmcheck, 0) && (time(nullptr) > 1577836800L);
                 if (timeValid) {
-                    Serial.println("\n[wifi] Conectado — RTC válido, pulando NTP");
+                    LOG_I("wifi", "Conectado (RSSI %d dBm) — RTC valido, pulando NTP",
+                          WiFi.RSSI());
                     finishAsync();
                 } else {
-                    Serial.println("\n[wifi] Conectado — sincronizando NTP");
+                    LOG_I("wifi", "Conectado (RSSI %d dBm) — sincronizando NTP",
+                          WiFi.RSSI());
                     configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
                     _asyncStartMs = millis();
                     _state        = ASYNC_NTP_SYNCING;
                 }
             } else if (millis() - _asyncStartMs >= 10000) {
-                Serial.println("\n[wifi] Timeout WiFi");
+                LOG_W("wifi", "Timeout de conexao");
                 wifiOff();
                 _state       = ASYNC_IDLE;
                 _firstFetch  = false;
@@ -62,10 +67,10 @@ static void pollAsync() {
 
         case ASYNC_NTP_SYNCING: {
             struct tm timeinfo;
-            bool ntpOk  = getLocalTime(&timeinfo, 0);
+            bool ntpOk   = getLocalTime(&timeinfo, 0);
             bool timeout = millis() - _asyncStartMs >= 10000;
-            if (ntpOk)   Serial.println("[wifi] NTP OK");
-            if (timeout && !ntpOk) Serial.println("[wifi] NTP timeout");
+            if (ntpOk)            LOG_I("wifi", "NTP sincronizado");
+            if (timeout && !ntpOk) LOG_W("wifi", "NTP timeout");
             if (ntpOk || timeout)  finishAsync();
             break;
         }
@@ -78,38 +83,45 @@ void wifiBeginAsync(WeatherData& out) {
     if (_state != ASYNC_IDLE) return;
     _asyncOut     = &out;
     _asyncStartMs = millis();
-    _state        = ASYNC_CONNECTING;
+
+    // Se keep-alive manteve WiFi ativo, pula direto para o fetch
+    if (WiFi.status() == WL_CONNECTED) {
+        LOG_I("wifi", "Ja conectado (keep-alive) — buscando clima");
+        finishAsync();
+        return;
+    }
+
+    _state = ASYNC_CONNECTING;
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("[wifi] Conectando (async)");
+    LOG_I("wifi", "Conectando (async)...");
 }
 
 bool wifiConnectAndFetch(WeatherData& out) {
-    // Versão bloqueante — usar apenas quando a tela está apagada (wake por timer).
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("[wifi] Conectando");
+    LOG_I("wifi", "Conectando...");
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-        Serial.print(".");
         delay(250);
     }
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("\n[wifi] Timeout — sem conexao");
+        LOG_W("wifi", "Timeout — sem conexao");
         wifiOff();
         return false;
     }
-    Serial.println(" OK");
+    LOG_I("wifi", "Conectado — RSSI %d dBm  IP %s",
+          WiFi.RSSI(), WiFi.localIP().toString().c_str());
 
     configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
-    Serial.print("[wifi] Aguardando NTP");
     struct tm timeinfo;
     bool ntpOk = false;
     for (int i = 0; i < 20 && !ntpOk; i++) {
         ntpOk = getLocalTime(&timeinfo);
-        if (!ntpOk) { Serial.print("."); delay(500); }
+        if (!ntpOk) delay(500);
     }
-    Serial.println(ntpOk ? " OK" : " FALHOU");
+    if (ntpOk) LOG_I("wifi", "NTP sincronizado");
+    else       LOG_W("wifi", "NTP timeout");
 
     bool ok = weatherFetch(out);
     wifiOff();
@@ -123,19 +135,33 @@ void wifiInit(WeatherData& weatherData) {
 }
 
 void wifiScheduleUpdate(WeatherData& weatherData) {
-    // Avança operação async em andamento
     if (_state != ASYNC_IDLE) {
-        _asyncOut = &weatherData;  // garante ponteiro atualizado
+        _asyncOut = &weatherData;
         pollAsync();
         return;
     }
     if (_firstFetch) return;
     if (millis() - _lastFetchMs >= WEATHER_UPDATE_INTERVAL_MS) {
-        Serial.println("[wifi] Atualizacao programada do clima");
+        LOG_I("wifi", "Atualizacao programada do clima");
         wifiBeginAsync(weatherData);
     }
 }
 
 bool wifiIsFetching() {
     return _state != ASYNC_IDLE;
+}
+
+void wifiSetKeepAlive(bool keep) {
+    _keepAlive = keep;
+    if (!keep && _state == ASYNC_IDLE && WiFi.status() == WL_CONNECTED) {
+        // Cliente desconectou e não há fetch em curso — desliga WiFi agora
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        LOG_I("wifi", "WiFi OFF (keep-alive liberado)");
+    }
+}
+
+int wifiGetRSSI() {
+    if (WiFi.status() != WL_CONNECTED) return 0;
+    return WiFi.RSSI();
 }

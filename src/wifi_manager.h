@@ -18,3 +18,10 @@ bool wifiConnectAndFetch(WeatherData& out);
 
 // Retorna true enquanto a operação async está em andamento (para indicador na tela).
 bool wifiIsFetching();
+
+// Mantém WiFi ativo mesmo após fetch (ex: cliente Telnet conectado).
+// Quando liberado (keep=false), WiFi é desligado na primeira oportunidade.
+void wifiSetKeepAlive(bool keep);
+
+// Retorna RSSI atual em dBm, ou 0 se desconectado.
+int wifiGetRSSI();

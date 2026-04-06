@@ -1,6 +1,8 @@
 #include <M5Unified.h>
+#include <WiFi.h>
 #include <esp_sleep.h>
 #include "config.h"
+#include "logger.h"
 #include "weather_api.h"
 #include "wifi_manager.h"
 #include "power_manager.h"
@@ -8,6 +10,7 @@
 #include "screen_weather.h"
 #include "screen_splash.h"
 #include "led_strip.h"
+#include "telnet_log.h"
 
 // ── LTR553 — sensor de proximidade embutido (I2C interno 0x23) ───────────────
 #define LTR553_ADDR         0x23
@@ -19,7 +22,7 @@
 static void ltr553Init() {
     M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_PS_CONTR, 0x03, LTR553_I2C_FREQ);
     delay(10);
-    Serial.println("[ltr553] Proximidade inicializada");
+    LOG_I("ltr553", "Sensor de proximidade iniciado (limiar=%d)", LTR553_PROX_THRESH);
 }
 
 static uint16_t ltr553ReadProx() {
@@ -29,10 +32,10 @@ static uint16_t ltr553ReadProx() {
 }
 
 // ── Estado persistido no RTC (sobrevive ao deep sleep) ───────────────────────
-RTC_DATA_ATTR static uint8_t     rtcBootCount   = 0;      // 0 = cold boot
+RTC_DATA_ATTR static uint8_t     rtcBootCount   = 0;
 RTC_DATA_ATTR static int         rtcScreen      = 0;
 RTC_DATA_ATTR static WeatherData rtcWeather     = {};
-RTC_DATA_ATTR static int         rtcTimerState  = 0;      // 0=SETTING, 2=PAUSED
+RTC_DATA_ATTR static int         rtcTimerState  = 0;
 RTC_DATA_ATTR static int         rtcTimerPreset = 2;
 RTC_DATA_ATTR static uint32_t    rtcTimerRemain = 5 * 60000;
 
@@ -52,11 +55,9 @@ static uint32_t touchStartMs      = 0;
 
 static bool     alarmWasActive  = false;
 static uint32_t lastBeepMs      = 0;
-static uint8_t  lastDimMinute   = 255;  // controla refresh do relógio no dim
+static uint8_t  lastDimMinute   = 255;
 
 // ── Orientação via acelerômetro ───────────────────────────────────────────────
-// Detecta rotação 180° em landscape usando eixo X do acelerômetro.
-// ax > +0.4 → rotation 1 (normal); ax < -0.4 → rotation 3 (invertido).
 static int      currentRotation  = 1;
 static uint32_t lastImuMs        = 0;
 
@@ -75,7 +76,7 @@ static void updateOrientation() {
         currentRotation = newRot;
         M5.Display.setRotation(newRot);
         needsRedraw = true;
-        Serial.printf("[imu] Rotacao -> %d (ay=%.2f)\n", newRot, ay);
+        LOG_I("imu", "Rotacao -> %d (ay=%.2f)", newRot, ay);
     }
 }
 
@@ -85,12 +86,13 @@ static void initSprite() {
     canvas->setColorDepth(16);
     if (canvas->createSprite(M5.Display.width(), M5.Display.height())) {
         fb = canvas;
-        Serial.println("[main] Sprite alocado — sem flickering");
+        LOG_I("main", "Sprite alocado (%dx%d) — sem flickering",
+              M5.Display.width(), M5.Display.height());
     } else {
         delete canvas;
         canvas = nullptr;
         fb = &M5.Display;
-        Serial.println("[main] AVISO: sprite nao alocado, usando display direto");
+        LOG_E("main", "Sprite nao alocado — usando display direto (flickering)");
     }
 }
 
@@ -98,13 +100,76 @@ static void pushFrame() {
     if (canvas) canvas->pushSprite(0, 0);
 }
 
+// ── Log periódico de sensores ────────────────────────────────────────────────
+// Emite status completo de todos os sensores a cada STATUS_LOG_INTERVAL_MS.
+#define STATUS_LOG_INTERVAL_MS  60000UL
+
+static void logSensorStatus() {
+    static uint32_t lastStatusMs = 0;
+    if (millis() - lastStatusMs < STATUS_LOG_INTERVAL_MS) return;
+    lastStatusMs = millis();
+
+    // Bateria e estado do display
+    int  batt     = batteryPercent();
+    bool charging = batteryIsCharging();
+    LOG_I("status", "bat=%d%% chg=%s dim=%s tela=%d boot#%u",
+          batt,
+          charging  ? "sim" : "nao",
+          powerIsDim() ? "sim" : "nao",
+          currentScreen,
+          (unsigned)rtcBootCount);
+
+    // LTR553 — sensor de proximidade
+    uint16_t prox = ltr553ReadProx();
+    LOG_I("ltr553", "prox=%u  limiar=%d  %s",
+          prox, LTR553_PROX_THRESH,
+          prox > LTR553_PROX_THRESH ? "ATIVADO" : "ok");
+
+    // IMU — acelerômetro
+    float ax, ay, az;
+    if (M5.Imu.getAccel(&ax, &ay, &az)) {
+        LOG_I("imu", "ax=%.2f ay=%.2f az=%.2f  rot=%d", ax, ay, az, currentRotation);
+    } else {
+        LOG_W("imu", "Leitura indisponivel");
+    }
+
+    // WiFi — conectividade e sinal
+    if (WiFi.status() == WL_CONNECTED) {
+        LOG_I("wifi", "Conectado  RSSI=%d dBm  IP=%s",
+              WiFi.RSSI(), WiFi.localIP().toString().c_str());
+    } else {
+        LOG_I("wifi", "Desconectado%s", wifiIsFetching() ? " (buscando...)" : "");
+    }
+
+    // Timer — estado atual
+    const char* timerState = "SETTING";
+    if      (screenHomeIsAlarmActive())  timerState = "ALARME";
+    else if (screenHomeIsTimerRunning()) timerState = "RUNNING";
+    else if (screenHomeIsTimerActive())  timerState = "PAUSED";
+    TimerPersist tp = screenHomeGetTimerPersist();
+    LOG_I("timer", "%s  preset=%d  remain=%lus",
+          timerState, tp.presetIdx, (unsigned long)(tp.remainMs / 1000));
+
+    // Clima — últimos dados recebidos
+    if (weatherData.valid) {
+        LOG_I("clima", "temp=%.1fC max=%.1f min=%.1f umid=%.0f%% cod=%d (%s) upd=%s",
+              weatherData.tempCurrent,
+              weatherData.tempMax,
+              weatherData.tempMin,
+              weatherData.humidity,
+              weatherData.weatherCode,
+              weatherData.description,
+              weatherData.lastUpdated);
+    } else {
+        LOG_W("clima", "Sem dados validos");
+    }
+}
+
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
     auto cause       = esp_sleep_get_wakeup_cause();
     bool isColdBoot  = (cause == ESP_SLEEP_WAKEUP_UNDEFINED);
     bool isTimerWake = (cause == ESP_SLEEP_WAKEUP_TIMER);
-    // ESP32-S3 pode reportar GPIO em vez de EXT0 para wake por toque;
-    // qualquer wake que não seja cold boot nem timer é tratado como toque
     bool isTouchWake = !isColdBoot && !isTimerWake;
 
     auto cfg = M5.config();
@@ -112,9 +177,6 @@ void setup() {
     M5.begin(cfg);
     M5.Speaker.setVolume(140);
 
-    // Restaura timezone. No cold boot: configTime() completo (inicia SNTP).
-    // No wake: apenas setenv+tzset — NÃO reinicializa o SNTP para não apagar
-    // o sync do relógio preservado no RTC durante o deep sleep.
     if (isColdBoot) {
         configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     } else {
@@ -130,32 +192,35 @@ void setup() {
     ledInit();
     powerInit();
     screenHomeInit();
+    telnetLogInit();
 
-    // ── Wake silencioso por timer: atualiza clima e volta a dormir ──────────
+    const char* wakeReason = isColdBoot  ? "cold-boot"  :
+                             isTimerWake ? "timer-wake" : "touch-wake";
+    LOG_I("main", "=== BOOT #%u (%s) ===", (unsigned)rtcBootCount, wakeReason);
+
+    // ── Wake silencioso por timer ──────────────────────────────────────────
     if (isTimerWake && rtcBootCount > 0) {
-        Serial.println("[main] Wake por timer — atualizando clima");
+        LOG_I("main", "Wake por timer — atualizando clima e voltando a dormir");
         M5.Display.setBrightness(0);
         weatherData = rtcWeather;
         wifiConnectAndFetch(weatherData);
         rtcWeather = weatherData;
         rtcBootCount++;
         powerEnterDeepSleep();
-        return;  // nunca chega aqui
+        return;
     }
 
-    // ── Cold boot ou wake por toque ─────────────────────────────────────────
+    // ── Cold boot ou wake por toque ────────────────────────────────────────
     currentScreen = rtcScreen;
     weatherData   = rtcWeather;
 
     if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
-        // Restaura estado do timer sem re-inicializar tudo
-        Serial.println("[main] Wake por toque — restaurando estado");
+        LOG_I("main", "Wake por toque — restaurando estado");
         TimerPersist tp = { rtcTimerState, rtcTimerPreset, rtcTimerRemain };
         screenHomeSetTimerPersist(tp);
-        wifiBeginAsync(weatherData);  // inicia busca do clima após wake
+        wifiBeginAsync(weatherData);
     } else {
-        // Cold boot: splash + init completo
-        Serial.println("[main] Boot inicial");
+        LOG_I("main", "Boot inicial — splash + init completo");
         drawSplash(*fb);
         pushFrame();
         wifiInit(weatherData);
@@ -163,13 +228,16 @@ void setup() {
     }
 
     rtcBootCount++;
+    telnetLogSetBoot(rtcBootCount);
     needsRedraw = true;
-    Serial.println("[main] Setup concluido");
+    LOG_I("main", "Setup concluido — Telnet porta %d (apos WiFi) | SD: %s",
+          TELNET_LOG_PORT, "ver [sd] acima");
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
     M5.update();
+    telnetLogUpdate();
 
     // ── Toque ────────────────────────────────────────────────────────────────
     auto touch = M5.Touch.getDetail();
@@ -180,7 +248,7 @@ void loop() {
         touchStartY       = touch.y;
         touchStartMs      = millis();
         powerOnTouch();
-        if (touchStartedInDim) needsRedraw = true;  // acorda do dim → redesenha
+        if (touchStartedInDim) needsRedraw = true;
     }
 
     if (touch.wasReleased() && !touchStartedInDim) {
@@ -193,16 +261,16 @@ void loop() {
         } else if (currentScreen == 0 && touchStartY >= 118) {
             if (longPress) {
                 screenHomeTimerLongPress();
-                Serial.println("[main] Timer: long press");
+                LOG_I("main", "Timer: long press");
             } else {
                 screenHomeTimerTap(touchStartX);
-                Serial.println("[main] Timer: tap");
+                LOG_I("main", "Timer: tap (x=%d)", touchStartX);
             }
             needsRedraw = true;
         } else if (!longPress) {
             currentScreen = (currentScreen + 1) % 2;
             needsRedraw   = true;
-            Serial.printf("[main] Tela -> %d\n", currentScreen);
+            LOG_I("main", "Tela -> %d", currentScreen);
         }
     }
 
@@ -210,30 +278,33 @@ void loop() {
     static uint32_t lastProxMs = 0;
     if (powerIsDim() && (millis() - lastProxMs >= 100)) {
         lastProxMs = millis();
-        if (ltr553ReadProx() > LTR553_PROX_THRESH) {
+        uint16_t prox = ltr553ReadProx();
+        if (prox > LTR553_PROX_THRESH) {
+            LOG_I("ltr553", "Proximidade detectada (%u > %d) — acordando display",
+                  prox, LTR553_PROX_THRESH);
             powerOnTouch();
             needsRedraw = true;
         }
     }
 
-    // ── Orientação (acelerômetro) — apenas quando ativo ─────────────────────────
+    // ── Orientação (acelerômetro) ────────────────────────────────────────────
     if (!powerIsDim()) updateOrientation();
 
     // ── Dim por inatividade ───────────────────────────────────────────────────
     bool wasDim = powerIsDim();
     powerUpdate();
-    if (wasDim != powerIsDim()) needsRedraw = true;  // transição em qualquer direção
+    if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ─────────────────────────────────────────────────────────
     wifiScheduleUpdate(weatherData);
 
     // ── Deep sleep ───────────────────────────────────────────────────────────
-    // Bloqueia se timer ativo (rodando/pausado) ou alarme tocando
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
         powerShouldDeepSleep()) {
 
-        Serial.println("[main] Deep sleep — salvando estado");
-        rtcScreen = currentScreen;
+        LOG_I("main", "Deep sleep — salvando estado (bat=%d%% tela=%d)",
+              batteryPercent(), currentScreen);
+        rtcScreen  = currentScreen;
         rtcWeather = weatherData;
 
         TimerPersist tp = screenHomeGetTimerPersist();
@@ -243,7 +314,7 @@ void loop() {
 
         ledOff();
         powerEnterDeepSleep();
-        return;  // nunca chega aqui
+        return;
     }
 
     // ── Alarme sonoro ─────────────────────────────────────────────────────────
@@ -251,9 +322,9 @@ void loop() {
     if (alarmActive) {
         uint32_t now = millis();
         if (now - lastBeepMs >= 1800) {
-            M5.Speaker.tone(523, 200);   // C5
-            M5.Speaker.tone(659, 200);   // E5
-            M5.Speaker.tone(784, 500);   // G5 — acorde maior, suave
+            M5.Speaker.tone(523, 200);
+            M5.Speaker.tone(659, 200);
+            M5.Speaker.tone(784, 500);
             lastBeepMs = now;
         }
         if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0)) {
@@ -261,19 +332,22 @@ void loop() {
         }
     } else if (alarmWasActive) {
         M5.Speaker.stop();
+        LOG_I("main", "Alarme encerrado");
     }
     alarmWasActive = alarmActive;
 
+    // ── Log periódico de sensores ─────────────────────────────────────────────
+    logSensorStatus();
+
     // ── Redesenho ─────────────────────────────────────────────────────────────
-    // No dim + tela do relógio: atualiza uma vez por minuto (no segundo 0)
     if (powerIsDim() && currentScreen == 0 && !needsRedraw) {
         struct tm t;
         if (getLocalTime(&t, 0) && t.tm_sec == 0 && t.tm_min != lastDimMinute) {
-            needsRedraw    = true;
-            lastDimMinute  = t.tm_min;
+            needsRedraw   = true;
+            lastDimMinute = t.tm_min;
         }
     }
-    if (!powerIsDim()) lastDimMinute = 255;  // reseta ao sair do dim
+    if (!powerIsDim()) lastDimMinute = 255;
 
     // ── LEDs ─────────────────────────────────────────────────────────────────
     ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
