@@ -20,13 +20,15 @@ const char* wmoToDescription(int code) {
 
 bool weatherFetch(WeatherData& out) {
     // Monta URL da API OpenMeteo — HTTP sem autenticação
-    String url = "http://api.open-meteo.com/v1/forecast"
-                 "?latitude=" + String(GEO_LATITUDE, 4) +
-                 "&longitude=" + String(GEO_LONGITUDE, 4) +
-                 "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
-                 "&daily=temperature_2m_max,temperature_2m_min,weathercode"
-                 "&timezone=Asia%2FTokyo"
-                 "&forecast_days=1";
+    // snprintf evita fragmentação de heap causada por String + concatenação
+    char url[256];
+    snprintf(url, sizeof(url),
+        "http://api.open-meteo.com/v1/forecast"
+        "?latitude=%.4f&longitude=%.4f"
+        "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
+        "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+        "&timezone=Asia%%2FTokyo&forecast_days=1",
+        GEO_LATITUDE, GEO_LONGITUDE);
 
     HTTPClient http;
     http.begin(url);

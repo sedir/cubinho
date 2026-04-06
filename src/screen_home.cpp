@@ -34,6 +34,7 @@ void screenHomeTimerTap() {
         case TIMER_SETTING:
             presetIdx     = (presetIdx + 1) % NUM_PRESETS;
             timerRemainMs = PRESETS_MS[presetIdx];
+            M5.Speaker.tone(1200, 30);
             break;
         case TIMER_RUNNING:
             timerRemainMs = getRemaining();

@@ -209,7 +209,6 @@ void loop() {
         rtcTimerPreset = tp.presetIdx;
         rtcTimerRemain = tp.remainMs;
 
-        rtcBootCount++;
         powerEnterDeepSleep();
         return;  // nunca chega aqui
     }
@@ -224,7 +223,7 @@ void loop() {
             M5.Speaker.tone(1320, 400);
             lastBeepMs = now;
         }
-        if ((now / 400) % 2 == 0 != (lastDrawMs / 400) % 2 == 0) {
+        if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0)) {
             needsRedraw = true;
         }
     } else if (alarmWasActive) {

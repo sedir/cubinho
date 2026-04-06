@@ -11,7 +11,7 @@ static WeatherData* _asyncOut     = nullptr;
 static uint32_t     _asyncStartMs = 0;
 static bool         _firstFetch   = true;
 
-RTC_DATA_ATTR static uint32_t _lastFetchMs = 0;  // não usado após wake (millis reseta)
+static uint32_t _lastFetchMs = 0;
 
 // ── Helpers internos ──────────────────────────────────────────────────────────
 static void wifiOff() {
@@ -37,10 +37,20 @@ static void pollAsync() {
 
         case ASYNC_CONNECTING:
             if (WiFi.status() == WL_CONNECTED) {
-                Serial.println("\n[wifi] Conectado — sincronizando NTP");
-                configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
-                _asyncStartMs = millis();
-                _state        = ASYNC_NTP_SYNCING;
+                // Só reinicia o SNTP se o RTC ainda não estiver sincronizado.
+                // Após wake do deep sleep o RTC é válido — forçar configTime()
+                // reinicia o SNTP e pode causar falha temporária em getLocalTime().
+                struct tm _tmcheck;
+                bool timeValid = getLocalTime(&_tmcheck, 0) && (time(nullptr) > 1577836800L);
+                if (timeValid) {
+                    Serial.println("\n[wifi] Conectado — RTC válido, pulando NTP");
+                    finishAsync();
+                } else {
+                    Serial.println("\n[wifi] Conectado — sincronizando NTP");
+                    configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
+                    _asyncStartMs = millis();
+                    _state        = ASYNC_NTP_SYNCING;
+                }
             } else if (millis() - _asyncStartMs >= 10000) {
                 Serial.println("\n[wifi] Timeout WiFi");
                 wifiOff();
