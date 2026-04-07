@@ -410,6 +410,11 @@ void loop() {
                 LOG_I("main", "Timer T%d: tap (x=%d)", screenHomeGetFocusedSlot() + 1, touchStartX);
                 needsRedraw = true;
             }
+        } else if (currentScreen == 1 && longPress) {
+            // Long press na tela do clima → força atualização imediata
+            wifiForceRefresh(weatherData);
+            needsRedraw = true;
+            LOG_I("main", "Clima: atualizacao forcada pelo usuario");
         } else if (!longPress) {
             // Tap fora da zona do timer → avança para próxima tela
             int newScreen = (currentScreen + 1) % SCREEN_COUNT;

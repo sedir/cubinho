@@ -8,6 +8,7 @@ bool wifiConnectAndFetch(WeatherData& out);
 bool wifiIsFetching();
 void wifiSetKeepAlive(bool keep);
 int  wifiGetRSSI();
+void wifiForceRefresh(WeatherData& weatherData);  // dispara atualização imediata
 
 // Portal cativo WiFi (item #23)
 bool wifiIsPortalMode();     // true se em modo AP de configuração

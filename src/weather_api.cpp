@@ -116,9 +116,16 @@ bool weatherFetch(WeatherData& out) {
     }
 
     // Sparkline: adiciona temperatura atual ao histórico circular (item #17)
+    bool wasEmpty = (out.trendCount == 0);
     out.trendTemp[out.trendIdx] = out.tempCurrent;
     out.trendIdx = (out.trendIdx + 1) % TREND_SAMPLES;
     if (out.trendCount < TREND_SAMPLES) out.trendCount++;
+    // Garante >=2 amostras no primeiro boot para o drawSparkline poder desenhar
+    if (wasEmpty) {
+        out.trendTemp[out.trendIdx] = out.tempCurrent;
+        out.trendIdx = (out.trendIdx + 1) % TREND_SAMPLES;
+        out.trendCount++;
+    }
 
     LOG_I("weather", "OK — %.1f°C (prev %.1f°C), WMO:%d, %dh dados",
           out.tempCurrent, out.tempPrevious, out.weatherCode, out.hourlyCount);

@@ -273,6 +273,12 @@ void wifiScheduleUpdate(WeatherData& weatherData) {
     }
 }
 
+void wifiForceRefresh(WeatherData& weatherData) {
+    if (_state != ASYNC_IDLE) return;  // já buscando
+    LOG_I("wifi", "Atualizacao forcada pelo usuario");
+    wifiBeginAsync(weatherData);
+}
+
 bool wifiIsFetching() { return _state != ASYNC_IDLE; }
 bool wifiIsPortalMode() { return _portalMode; }
 

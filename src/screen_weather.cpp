@@ -257,12 +257,12 @@ void screenWeatherDraw(lgfx::LovyanGFX& display, const WeatherData& data, bool f
     display.setTextColor(COLOR_HUMIDITY, COLOR_BACKGROUND);
     display.drawString(buf, 16, 132);
 
+    display.drawFastHLine(10, 156, display.width() - 20, COLOR_DIVIDER);
+
     // Sparkline de tendência 24h (item #17)
     if (data.trendCount >= 2) {
-        drawSparkline(display, data, 16, 136, 200, 12);
+        drawSparkline(display, data, 16, 160, 200, 10);
     }
-
-    display.drawFastHLine(10, 156, display.width() - 20, COLOR_DIVIDER);
 
     // Previsão horária com mini ícones (items #5, #20)
     drawHourlyForecast(display, data);
