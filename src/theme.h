@@ -41,4 +41,4 @@
 
 // ── Layout constants ─────────────────────────────────────────────────────────
 #define TIMER_ZONE_Y         118   // fronteira toque relógio / timer
-#define SCREEN_COUNT         3     // home, weather, system
+#define SCREEN_COUNT         4     // home, weather, system, settings

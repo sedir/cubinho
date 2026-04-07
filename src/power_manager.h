@@ -34,3 +34,19 @@ void powerBatteryTick();
 
 // Retorna estimativa de minutos restantes. -1 se insuficiente.
 int batteryGetEstimateMinutes();
+
+// ── Setters de configuração runtime ─────────────────────────────────────────
+// Define o brilho alvo para modo ativo (0–255).
+void powerSetBrightnessActive(int brightness);
+
+// Define o timeout de inatividade até dim (ms, 0 = nunca).
+void powerSetDimTimeout(uint32_t ms);
+
+// Define o timeout até deep sleep (ms, 0 = nunca).
+void powerSetDeepSleepTimeout(uint32_t ms);
+
+// Habilita ou desabilita o auto-brilho via sensor ALS.
+void powerSetAutoBrightness(bool enabled);
+
+// Define o intervalo de atualização do clima (ms) — usado no timer do deep sleep.
+void powerSetWeatherInterval(uint32_t ms);

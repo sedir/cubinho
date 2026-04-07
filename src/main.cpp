@@ -11,6 +11,8 @@
 #include "screen_weather.h"
 #include "screen_system.h"
 #include "screen_splash.h"
+#include "screen_settings.h"
+#include "runtime_config.h"
 #include "led_strip.h"
 #include "telnet_log.h"
 #include "ota_manager.h"
@@ -46,8 +48,10 @@ RTC_DATA_ATTR static uint32_t    rtcTimerRemain[MAX_TIMERS]  = { 300000, 600000,
 RTC_DATA_ATTR static int         rtcTimerFocused = 0;
 
 // ── Estado volátil ───────────────────────────────────────────────────────────
-static int         currentScreen = 0;
-static WeatherData weatherData   = {};
+static int         currentScreen  = 0;
+static WeatherData weatherData    = {};
+static RuntimeConfig g_runtimeCfg = {};
+static int         g_settingsScroll = 0;
 static uint32_t    lastDrawMs    = 0;
 static bool        needsRedraw   = true;
 
@@ -146,6 +150,7 @@ static void drawCurrentScreen(lgfx::LovyanGFX& target) {
         case 0: screenHomeDraw(target, wifiIsFetching(), powerIsDim()); break;
         case 1: screenWeatherDraw(target, weatherData, wifiIsFetching()); break;
         case 2: screenSystemDraw(target, rtcBootCount); break;
+        case 3: screenSettingsDraw(target, g_runtimeCfg, g_settingsScroll); break;
     }
 }
 
@@ -275,6 +280,8 @@ void setup() {
     screenHomeInit();
     telnetLogInit();
     eventsInit();
+    runtimeConfigLoad(g_runtimeCfg);
+    runtimeConfigApply(g_runtimeCfg);
 
     const char* wakeReason = isColdBoot  ? "cold-boot"  :
                              isTimerWake ? "timer-wake" : "touch-wake";
@@ -312,7 +319,7 @@ void setup() {
         drawSplash(*fb);
         pushFrame();
         wifiInit(weatherData);
-        wifiSetKeepAlive(WIFI_KEEP_ALIVE);
+        // wifiKeepAlive já aplicado por runtimeConfigApply() acima
         rtcWeather = weatherData;
     }
 
@@ -330,26 +337,12 @@ void loop() {
     wifiPortalUpdate();   // item #23
     otaUpdate();          // item #21
 
-    // ── Portal mode: tela de configuração ────
+    // ── Portal mode: tela de configuração WiFi ───────────────────────────────
     if (wifiIsPortalMode()) {
         static uint32_t lastPortalDraw = 0;
         if (millis() - lastPortalDraw > 2000) {
             lastPortalDraw = millis();
-            fb->fillScreen(COLOR_BACKGROUND);
-            fb->setFont(&fonts::FreeSansBold18pt7b);
-            fb->setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
-            fb->setTextDatum(MC_DATUM);
-            fb->drawString("WiFi Setup", fb->width() / 2, 50);
-
-            fb->setFont(&fonts::FreeSans9pt7b);
-            fb->setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-            fb->drawString("Conecte-se a rede:", fb->width() / 2, 100);
-            fb->setTextColor(COLOR_TIMER_RUNNING, COLOR_BACKGROUND);
-            fb->drawString(WIFI_PORTAL_AP_NAME, fb->width() / 2, 125);
-            fb->setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-            fb->drawString("e acesse:", fb->width() / 2, 155);
-            fb->setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
-            fb->drawString("192.168.4.1", fb->width() / 2, 180);
+            drawWifiPortalScreen(*fb);
             pushFrame();
         }
         delay(50);
@@ -380,13 +373,42 @@ void loop() {
             screenHomeTimerTap(touchStartX);
             needsRedraw = true;
         } else if (isSwipe) {
-            // Swipe horizontal → navega entre telas na direção do gesto
-            int dir       = (swipeDeltaX < 0) ? 1 : -1;
-            int newScreen = (currentScreen + dir + SCREEN_COUNT) % SCREEN_COUNT;
-            animateTransition(currentScreen, newScreen, dir);
-            currentScreen = newScreen;
-            needsRedraw   = true;
-            LOG_I("main", "Swipe %s -> tela %d", dir > 0 ? "esq" : "dir", currentScreen);
+            // Swipe horizontal → navega entre telas
+            int dir = (swipeDeltaX < 0) ? 1 : -1;
+            if (currentScreen == 3) {
+                // Tela de configurações: só swipe direita sai (volta para System)
+                if (dir == -1) {
+                    animateTransition(3, 2, -1);
+                    currentScreen = 2;
+                    needsRedraw   = true;
+                    LOG_I("main", "Settings: swipe dir -> tela 2");
+                }
+                // Swipe esquerda na settings → ignorado
+            } else {
+                int newScreen = (currentScreen + dir + SCREEN_COUNT) % SCREEN_COUNT;
+                animateTransition(currentScreen, newScreen, dir);
+                currentScreen = newScreen;
+                needsRedraw   = true;
+                LOG_I("main", "Swipe %s -> tela %d", dir > 0 ? "esq" : "dir", currentScreen);
+            }
+        } else if (currentScreen == 3) {
+            // Tela de configurações: scroll vertical, tap e long press
+            bool isVertSwipe = (abs(swipeDeltaY) >= 20 && abs(swipeDeltaY) > abs(swipeDeltaX));
+            if (isVertSwipe) {
+                g_settingsScroll = constrain(g_settingsScroll - swipeDeltaY,
+                                             0, screenSettingsMaxScroll());
+                needsRedraw = true;
+            } else if (longPress) {
+                screenSettingsHandleLongPress(touchStartX, touchStartY, g_settingsScroll);
+                // Se chegou aqui, nenhum restart ocorreu (ação não executada)
+            } else {
+                if (screenSettingsHandleTap(touchStartX, touchStartY,
+                                             g_runtimeCfg, g_settingsScroll)) {
+                    runtimeConfigSave(g_runtimeCfg);
+                    runtimeConfigApply(g_runtimeCfg);
+                    needsRedraw = true;
+                }
+            }
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)
             if (touchStartY < TIMER_ZONE_Y + 26) {
@@ -415,8 +437,8 @@ void loop() {
             wifiForceRefresh(weatherData);
             needsRedraw = true;
             LOG_I("main", "Clima: atualizacao forcada pelo usuario");
-        } else if (!longPress) {
-            // Tap fora da zona do timer → avança para próxima tela
+        } else if (!longPress && currentScreen != 3) {
+            // Tap fora da zona do timer → avança para próxima tela (exceto settings)
             int newScreen = (currentScreen + 1) % SCREEN_COUNT;
             animateTransition(currentScreen, newScreen, 1);
             currentScreen = newScreen;

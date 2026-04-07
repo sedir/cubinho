@@ -11,6 +11,13 @@ enum PowerState { POWER_ACTIVE, POWER_DIM };
 static PowerState _powerState  = POWER_ACTIVE;
 static uint32_t   _lastTouchMs = 0;
 
+// ── Parâmetros runtime (ajustáveis via RuntimeConfig) ────────────────────────
+static uint32_t _dimTimeoutMs       = DIM_TIMEOUT_MS;
+static uint32_t _deepSleepTimeoutMs = DEEP_SLEEP_TIMEOUT_MS;
+static uint32_t _weatherIntervalMs  = WEATHER_UPDATE_INTERVAL_MS;
+static int      _brightnessActiveRt = BRIGHTNESS_ACTIVE;
+static bool     _autoBrightnessEn   = AUTO_BRIGHTNESS_ENABLED;
+
 // ── Auto-brilho ALS (item #19) ──────────────────────────────────────────────
 #define LTR553_ADDR          0x23
 #define LTR553_ALS_CONTR     0x80
@@ -27,13 +34,11 @@ static uint8_t _brightnessBeforeDim = BRIGHTNESS_ACTIVE;  // salvo antes do dim
 static uint32_t _lastFadeMs         = 0;
 
 static void alsInit() {
-#if AUTO_BRIGHTNESS_ENABLED
     // ALS_CONTR: active mode, gain 1x
     M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_ALS_CONTR, 0x01, LTR553_I2C_FREQ);
     delay(10);
     _alsInitialized = true;
     LOG_I("als", "Sensor de luz iniciado");
-#endif
 }
 
 uint16_t powerReadAmbientLight() {
@@ -66,7 +71,7 @@ static void applyBrightnessFade() {
 
 // ── Auto-brilho: atualiza _targetBrightness a partir do sensor ALS ──────────
 static void updateAutoBrightnessTarget() {
-#if AUTO_BRIGHTNESS_ENABLED
+    if (!_autoBrightnessEn) return;
     if (_powerState != POWER_ACTIVE || !_alsInitialized) return;
     if (millis() - _lastTouchMs < 5000) return;  // não ajusta enquanto em uso
 
@@ -86,7 +91,6 @@ static void updateAutoBrightnessTarget() {
     // EMA leve no alvo para evitar jitter no sensor
     _targetBrightness = (_targetBrightness * 3 + (uint8_t)target) / 4;
     if (_targetBrightness < BRIGHTNESS_MIN_FLOOR) _targetBrightness = BRIGHTNESS_MIN_FLOOR;
-#endif
 }
 
 // ── Estimativa de bateria (item #22) ─────────────────────────────────────────
@@ -132,9 +136,9 @@ int batteryGetEstimateMinutes() {
 void powerInit() {
     _lastTouchMs = millis();
     _powerState  = POWER_ACTIVE;
-    _currentBrightness = BRIGHTNESS_ACTIVE;
-    _targetBrightness  = BRIGHTNESS_ACTIVE;
-    M5.Display.setBrightness(BRIGHTNESS_ACTIVE);
+    _currentBrightness = _brightnessActiveRt;
+    _targetBrightness  = _brightnessActiveRt;
+    M5.Display.setBrightness(_brightnessActiveRt);
     alsInit();
 }
 
@@ -142,7 +146,8 @@ void powerOnTouch() {
     _lastTouchMs = millis();
     if (_powerState == POWER_DIM) {
         _powerState = POWER_ACTIVE;
-        _targetBrightness = _brightnessBeforeDim;  // restaura brilho anterior ao dim
+        // Restaura brilho salvo antes do dim, mas respeita o limite ativo configurado
+        _targetBrightness = min((int)_brightnessBeforeDim, _brightnessActiveRt);
         LOG_I("power", "Display restaurado — ACTIVE (fade)");
     }
 }
@@ -168,7 +173,7 @@ void powerUpdate(bool keepAwake) {
 
     // Bateria critica: dim após timeout normal
     if (pct >= 0 && pct <= 10 && _powerState == POWER_ACTIVE) {
-        if (millis() - _lastTouchMs > DIM_TIMEOUT_MS) {
+        if (millis() - _lastTouchMs > _dimTimeoutMs) {
             _brightnessBeforeDim = _currentBrightness;
             _powerState = POWER_DIM;
             _targetBrightness = dimFloor;  // fade suave até dim
@@ -181,7 +186,7 @@ void powerUpdate(bool keepAwake) {
 
     // Dim por inatividade
     if (_powerState == POWER_ACTIVE &&
-        (millis() - _lastTouchMs > DIM_TIMEOUT_MS)) {
+        (millis() - _lastTouchMs > _dimTimeoutMs)) {
         _brightnessBeforeDim = _currentBrightness;
         _powerState = POWER_DIM;
         _targetBrightness = dimFloor;  // fade suave até dim
@@ -200,7 +205,8 @@ bool powerIsDim() {
 }
 
 bool powerShouldDeepSleep() {
-    return (millis() - _lastTouchMs) > DEEP_SLEEP_TIMEOUT_MS;
+    if (_deepSleepTimeoutMs == 0) return false;  // 0 = nunca dormir
+    return (millis() - _lastTouchMs) > _deepSleepTimeoutMs;
 }
 
 void powerEnterDeepSleep() {
@@ -211,7 +217,7 @@ void powerEnterDeepSleep() {
     delay(50);
 
     esp_sleep_enable_ext0_wakeup((gpio_num_t)DEEP_SLEEP_WAKEUP_GPIO, 0);
-    esp_sleep_enable_timer_wakeup((uint64_t)WEATHER_UPDATE_INTERVAL_MS * 1000ULL);
+    esp_sleep_enable_timer_wakeup((uint64_t)_weatherIntervalMs * 1000ULL);
 
     LOG_I("power", "Entrando em deep sleep");
     Serial.flush();
@@ -224,4 +230,37 @@ int batteryPercent() {
 
 bool batteryIsCharging() {
     return M5.Power.isCharging();
+}
+
+// ── Setters de configuração runtime ─────────────────────────────────────────
+void powerSetBrightnessActive(int brightness) {
+    _brightnessActiveRt = constrain(brightness, BRIGHTNESS_MIN_FLOOR, 255);
+    if (_powerState == POWER_ACTIVE) {
+        _targetBrightness = _brightnessActiveRt;
+    }
+    LOG_I("power", "Brilho ativo -> %d", _brightnessActiveRt);
+}
+
+void powerSetDimTimeout(uint32_t ms) {
+    _dimTimeoutMs = ms;
+    LOG_I("power", "Dim timeout -> %lu ms", (unsigned long)ms);
+}
+
+void powerSetDeepSleepTimeout(uint32_t ms) {
+    _deepSleepTimeoutMs = ms;
+    LOG_I("power", "Deep sleep timeout -> %lu ms", (unsigned long)ms);
+}
+
+void powerSetAutoBrightness(bool enabled) {
+    _autoBrightnessEn = enabled;
+    if (!enabled && _powerState == POWER_ACTIVE) {
+        // Restaura para o brilho fixo configurado
+        _targetBrightness = _brightnessActiveRt;
+    }
+    LOG_I("power", "Auto-brilho -> %s", enabled ? "ON" : "OFF");
+}
+
+void powerSetWeatherInterval(uint32_t ms) {
+    _weatherIntervalMs = (ms > 0) ? ms : WEATHER_UPDATE_INTERVAL_MS;
+    LOG_I("power", "Weather interval (deep sleep timer) -> %lu ms", (unsigned long)_weatherIntervalMs);
 }

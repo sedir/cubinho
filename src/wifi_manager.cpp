@@ -14,9 +14,10 @@ enum AsyncState { ASYNC_IDLE, ASYNC_CONNECTING, ASYNC_NTP_SYNCING };
 static AsyncState   _state        = ASYNC_IDLE;
 static WeatherData* _asyncOut     = nullptr;
 static uint32_t     _asyncStartMs = 0;
-static bool         _firstFetch   = true;
-static bool         _keepAlive    = false;
-static uint32_t     _lastFetchMs  = 0;
+static bool         _firstFetch         = true;
+static bool         _keepAlive          = false;
+static uint32_t     _lastFetchMs        = 0;
+static uint32_t     _updateIntervalMs   = WEATHER_UPDATE_INTERVAL_MS;
 
 // ── Portal cativo (item #23) ─────────────────────────────────────────────────
 static bool       _portalMode     = false;
@@ -57,13 +58,9 @@ void wifiClearStoredCredentials() {
     LOG_I("wifi", "Credenciais NVS apagadas");
 }
 
-// Retorna SSID a usar: NVS primeiro, fallback para #define
-static const char* getSSID() {
-    return _nvsSSID.length() > 0 ? _nvsSSID.c_str() : WIFI_SSID;
-}
-static const char* getPass() {
-    return _nvsPass.length() > 0 ? _nvsPass.c_str() : WIFI_PASSWORD;
-}
+// Retorna SSID/senha do NVS — credenciais hardcoded foram removidas
+static const char* getSSID() { return _nvsSSID.c_str(); }
+static const char* getPass() { return _nvsPass.c_str(); }
 
 // ── Portal HTML ──────────────────────────────────────────────────────────────
 static const char PORTAL_HTML[] PROGMEM = R"rawliteral(
@@ -255,8 +252,16 @@ bool wifiConnectAndFetch(WeatherData& out) {
 
 void wifiInit(WeatherData& weatherData) {
     loadCredentials();
-    wifiConnectAndFetch(weatherData);
-    wifiCheckPortal();
+    if (!wifiHasStoredCredentials()) {
+        LOG_W("wifi", "Sem credenciais — iniciando portal cativo");
+        startPortal();
+        return;
+    }
+    bool ok = wifiConnectAndFetch(weatherData);
+    if (!ok) {
+        LOG_W("wifi", "Falha na conexao no cold boot — iniciando portal cativo");
+        startPortal();
+    }
 }
 
 void wifiScheduleUpdate(WeatherData& weatherData) {
@@ -267,7 +272,7 @@ void wifiScheduleUpdate(WeatherData& weatherData) {
         return;
     }
     if (_firstFetch) return;
-    if (millis() - _lastFetchMs >= WEATHER_UPDATE_INTERVAL_MS) {
+    if (millis() - _lastFetchMs >= _updateIntervalMs) {
         LOG_I("wifi", "Atualizacao programada do clima");
         wifiBeginAsync(weatherData);
     }
@@ -301,4 +306,9 @@ void wifiSetKeepAlive(bool keep) {
 int wifiGetRSSI() {
     if (WiFi.status() != WL_CONNECTED) return 0;
     return WiFi.RSSI();
+}
+
+void wifiSetUpdateInterval(uint32_t ms) {
+    _updateIntervalMs = (ms > 0) ? ms : WEATHER_UPDATE_INTERVAL_MS;
+    LOG_I("wifi", "Intervalo de atualizacao -> %lu ms", (unsigned long)_updateIntervalMs);
 }
