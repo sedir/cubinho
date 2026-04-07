@@ -50,3 +50,9 @@ void powerSetAutoBrightness(bool enabled);
 
 // Define o intervalo de atualização do clima (ms) — usado no timer do deep sleep.
 void powerSetWeatherInterval(uint32_t ms);
+
+// Habilita ou desabilita wake do dim via acelerômetro.
+void powerSetAccelWake(bool enabled);
+
+// Retorna true se o wake via acelerômetro está habilitado.
+bool powerIsAccelWakeEnabled();

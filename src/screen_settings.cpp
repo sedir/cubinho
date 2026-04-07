@@ -32,23 +32,25 @@ static const VEntry kEntries[] = {
     { EKIND_TOGGLE,   "Auto-brilho"      },  // 7
     { EKIND_CATEGORY, "Energia"          },  // 8
     { EKIND_CYCLE,    "Deep sleep"       },  // 9
-    { EKIND_CATEGORY, "Sistema"          },  // 10
-    { EKIND_ACTION,   "Reiniciar"        },  // 11 long press
-    { EKIND_ACTION,   "Reset de fabrica" },  // 12 long press
+    { EKIND_TOGGLE,   "Acelerometro"     },  // 10 acorda do dim ao mover
+    { EKIND_CATEGORY, "Sistema"          },  // 11
+    { EKIND_ACTION,   "Reiniciar"        },  // 12 long press
+    { EKIND_ACTION,   "Reset de fabrica" },  // 13 long press
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
 // Índices dos itens de configuração (não-categoria)
 enum ItemIdx {
-    IDX_KEEP_ALIVE   = 1,
-    IDX_WEATHER_INT  = 2,
-    IDX_WIFI_CHANGE  = 3,
-    IDX_BRIGHTNESS   = 5,
-    IDX_DIM_TIMEOUT  = 6,
-    IDX_AUTO_BRIGHT  = 7,
-    IDX_DEEP_SLEEP   = 9,
-    IDX_RESTART      = 11,
-    IDX_FACTORY_RESET = 12,
+    IDX_KEEP_ALIVE    = 1,
+    IDX_WEATHER_INT   = 2,
+    IDX_WIFI_CHANGE   = 3,
+    IDX_BRIGHTNESS    = 5,
+    IDX_DIM_TIMEOUT   = 6,
+    IDX_AUTO_BRIGHT   = 7,
+    IDX_DEEP_SLEEP    = 9,
+    IDX_ACCEL_WAKE    = 10,
+    IDX_RESTART       = 12,
+    IDX_FACTORY_RESET = 13,
 };
 
 // Opções de ciclo
@@ -99,6 +101,7 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
     switch (entryIdx) {
         case IDX_KEEP_ALIVE:  return cfg.wifiKeepAlive  ? "ON" : "OFF";
         case IDX_AUTO_BRIGHT: return cfg.autoBrightness ? "ON" : "OFF";
+        case IDX_ACCEL_WAKE:  return cfg.accelWake      ? "ON" : "OFF";
         case IDX_WEATHER_INT: {
             int v = cfg.weatherIntervalMin;
             if (v < 60) { char buf[8]; snprintf(buf, sizeof(buf), "%dmin", v); return buf; }
@@ -261,6 +264,9 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
             break;
         case IDX_AUTO_BRIGHT:
             cfg.autoBrightness = !cfg.autoBrightness;
+            break;
+        case IDX_ACCEL_WAKE:
+            cfg.accelWake = !cfg.accelWake;
             break;
         case IDX_WEATHER_INT: {
             int i = findClosestIdx(kWeatherOpts, kWeatherCnt, cfg.weatherIntervalMin);

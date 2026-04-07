@@ -264,3 +264,14 @@ void powerSetWeatherInterval(uint32_t ms) {
     _weatherIntervalMs = (ms > 0) ? ms : WEATHER_UPDATE_INTERVAL_MS;
     LOG_I("power", "Weather interval (deep sleep timer) -> %lu ms", (unsigned long)_weatherIntervalMs);
 }
+
+static bool _accelWakeEn = ACCEL_WAKE_ENABLED;
+
+void powerSetAccelWake(bool enabled) {
+    _accelWakeEn = enabled;
+    LOG_I("power", "Accel wake -> %s", enabled ? "ON" : "OFF");
+}
+
+bool powerIsAccelWakeEnabled() {
+    return _accelWakeEn;
+}

@@ -1,4 +1,4 @@
-# M5 CoreS3 — Kitchen Dashboard
+# M5 CoreS3 — Portela
 
 ## Visão geral do projeto
 

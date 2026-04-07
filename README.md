@@ -1,4 +1,4 @@
-# M5 CoreS3 — Kitchen Dashboard
+# M5 CoreS3 — Portela
 
 Firmware para M5Stack CoreS3 fixado na porta da geladeira. Exibe em alternância (toque na tela):
 

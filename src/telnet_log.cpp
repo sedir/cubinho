@@ -259,7 +259,7 @@ void telnetLogUpdate() {
     if (!_client || !_client.connected()) return;
 
     if (!_flushed) {
-        _client.print("\r\n=== Cidinha Kitchen Dashboard v2.0 ===\r\n");
+        _client.print("\r\n=== Portela v2.0 ===\r\n");
         _client.printf("=== SD: %s ===\r\n", _sdAvailable ? "gravando" : "sem cartao");
         _client.printf("=== %u linha(s) em buffer ===\r\n", _count);
         _client.print("Digite 'help' para comandos\r\n\r\n");

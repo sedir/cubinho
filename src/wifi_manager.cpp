@@ -66,7 +66,7 @@ static const char* getPass() { return _nvsPass.c_str(); }
 static const char PORTAL_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Cidinha Setup</title>
+<title>Portela Setup</title>
 <style>
 body{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding:40px}
 .c{background:#16213e;padding:30px;border-radius:16px;max-width:360px;width:100%}
@@ -77,7 +77,7 @@ button{width:100%;padding:14px;margin-top:16px;background:#e94560;color:white;bo
 border-radius:8px;font-size:18px;cursor:pointer}
 button:hover{background:#c81e45}
 </style></head><body><div class="c">
-<h1>Cidinha Setup</h1>
+<h1>Portela Setup</h1>
 <form method="POST" action="/save">
 <label>SSID</label><input name="ssid" required>
 <label>Senha</label><input name="pass" type="password" required>

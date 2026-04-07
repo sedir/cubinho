@@ -51,7 +51,8 @@ RTC_DATA_ATTR static int         rtcTimerFocused = 0;
 static int         currentScreen  = 0;
 static WeatherData weatherData    = {};
 static RuntimeConfig g_runtimeCfg = {};
-static int         g_settingsScroll = 0;
+static int         g_settingsScrollTarget = 0;   // destino do scroll (px)
+static float       g_settingsScrollAnim   = 0.0f; // posição animada atual
 static uint32_t    lastDrawMs    = 0;
 static bool        needsRedraw   = true;
 
@@ -150,7 +151,7 @@ static void drawCurrentScreen(lgfx::LovyanGFX& target) {
         case 0: screenHomeDraw(target, wifiIsFetching(), powerIsDim()); break;
         case 1: screenWeatherDraw(target, weatherData, wifiIsFetching()); break;
         case 2: screenSystemDraw(target, rtcBootCount); break;
-        case 3: screenSettingsDraw(target, g_runtimeCfg, g_settingsScroll); break;
+        case 3: screenSettingsDraw(target, g_runtimeCfg, (int)g_settingsScrollAnim); break;
     }
 }
 
@@ -395,15 +396,15 @@ void loop() {
             // Tela de configurações: scroll vertical, tap e long press
             bool isVertSwipe = (abs(swipeDeltaY) >= 20 && abs(swipeDeltaY) > abs(swipeDeltaX));
             if (isVertSwipe) {
-                g_settingsScroll = constrain(g_settingsScroll - swipeDeltaY,
-                                             0, screenSettingsMaxScroll());
+                g_settingsScrollTarget = constrain(g_settingsScrollTarget - swipeDeltaY,
+                                                   0, screenSettingsMaxScroll());
                 needsRedraw = true;
             } else if (longPress) {
-                screenSettingsHandleLongPress(touchStartX, touchStartY, g_settingsScroll);
+                screenSettingsHandleLongPress(touchStartX, touchStartY, (int)g_settingsScrollAnim);
                 // Se chegou aqui, nenhum restart ocorreu (ação não executada)
             } else {
                 if (screenSettingsHandleTap(touchStartX, touchStartY,
-                                             g_runtimeCfg, g_settingsScroll)) {
+                                             g_runtimeCfg, (int)g_settingsScrollAnim)) {
                     runtimeConfigSave(g_runtimeCfg);
                     runtimeConfigApply(g_runtimeCfg);
                     needsRedraw = true;
@@ -458,6 +459,31 @@ void loop() {
             needsRedraw = true;
         }
     }
+
+    // ── Acelerômetro — acorda do dim ao detectar movimento ──
+    static uint32_t lastAccelMs   = 0;
+    static float    lastAccelMag  = -1.0f;  // -1 = não inicializado
+    if (powerIsDim() && powerIsAccelWakeEnabled() && (millis() - lastAccelMs >= 200)) {
+        lastAccelMs = millis();
+        float ax, ay, az;
+        if (M5.Imu.getAccel(&ax, &ay, &az)) {
+            float mag = sqrtf(ax * ax + ay * ay + az * az);
+            if (lastAccelMag >= 0.0f) {
+                float delta = fabsf(mag - lastAccelMag);
+                if (delta > ACCEL_WAKE_THRESHOLD) {
+                    LOG_I("imu", "Movimento detectado (delta=%.2f) — acordando", delta);
+                    powerOnTouch();
+                    needsRedraw = true;
+                    lastAccelMag = -1.0f;  // reinicia para evitar wake em cadeia
+                } else {
+                    lastAccelMag = mag;
+                }
+            } else {
+                lastAccelMag = mag;
+            }
+        }
+    }
+    if (!powerIsDim()) lastAccelMag = -1.0f;  // reinicia ao sair do dim
 
     // ── Orientação ──
     if (!powerIsDim()) updateOrientation();
@@ -531,6 +557,17 @@ void loop() {
 
     // ── LEDs ──
     ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
+
+    // ── Scroll suave das configurações (lerp ease-out) ──
+    if (currentScreen == 3) {
+        float diff = (float)g_settingsScrollTarget - g_settingsScrollAnim;
+        if (fabsf(diff) > 0.5f) {
+            g_settingsScrollAnim += diff * 0.22f;
+            needsRedraw = true;
+        } else {
+            g_settingsScrollAnim = (float)g_settingsScrollTarget;
+        }
+    }
 
     if (powerIsDim() && !needsRedraw) { delay(100); return; }
 

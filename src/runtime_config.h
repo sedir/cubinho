@@ -8,6 +8,7 @@ struct RuntimeConfig {
     int   dimTimeoutSec;        // Tempo de inatividade até dim (segundos)
     bool  autoBrightness;       // Auto-brilho via sensor ALS
     int   deepSleepTimeoutMin;  // Timeout deep sleep (minutos, 0 = nunca)
+    bool  accelWake;            // Acorda do dim ao detectar movimento
 };
 
 // Carrega configuração do NVS (usa defaults de config.h se namespace vazio).

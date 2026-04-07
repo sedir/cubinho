@@ -14,6 +14,7 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     cfg.dimTimeoutSec       = _prefs.getInt ("dimTimeout", (int)(DIM_TIMEOUT_MS / 1000UL));
     cfg.autoBrightness      = _prefs.getBool("autoBright", AUTO_BRIGHTNESS_ENABLED);
     cfg.deepSleepTimeoutMin = _prefs.getInt ("sleepMin",   (int)(DEEP_SLEEP_TIMEOUT_MS / 60000UL));
+    cfg.accelWake           = _prefs.getBool("accelWake",  ACCEL_WAKE_ENABLED);
     _prefs.end();
 }
 
@@ -25,6 +26,7 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.putInt ("dimTimeout", cfg.dimTimeoutSec);
     _prefs.putBool("autoBright", cfg.autoBrightness);
     _prefs.putInt ("sleepMin",   cfg.deepSleepTimeoutMin);
+    _prefs.putBool("accelWake",  cfg.accelWake);
     _prefs.end();
 }
 
@@ -39,6 +41,7 @@ void runtimeConfigApply(const RuntimeConfig& cfg) {
                      : 0;
     powerSetDeepSleepTimeout(sleepMs);
     powerSetWeatherInterval((uint32_t)cfg.weatherIntervalMin * 60000UL);
+    powerSetAccelWake(cfg.accelWake);
 }
 
 void runtimeConfigClear() {

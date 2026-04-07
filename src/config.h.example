@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// CONFIGURAÇÃO DO KITCHEN DASHBOARD — M5 CoreS3
+// CONFIGURAÇÃO DO PORTELA — M5 CoreS3
 // Copie este arquivo para config.h e preencha com seus dados reais.
 // config.h está no .gitignore para proteger suas credenciais.
 // =============================================================================
@@ -52,11 +52,11 @@
 
 // OTA — atualização sem fio (ativo apenas quando WiFi mantido por Telnet)
 #define OTA_ENABLED  true
-#define OTA_HOSTNAME "cidinha"
+#define OTA_HOSTNAME "portela"
 
 // Timers de cozinha — número máximo de timers simultâneos
 #define MAX_TIMERS  3
 
 // Portal cativo WiFi — entra em modo AP para configuração após N falhas
 #define WIFI_PORTAL_FAIL_THRESHOLD  3
-#define WIFI_PORTAL_AP_NAME         "Cidinha-Setup"
+#define WIFI_PORTAL_AP_NAME         "Portela-Setup"

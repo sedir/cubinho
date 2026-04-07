@@ -89,7 +89,7 @@ void screenSystemDraw(lgfx::LovyanGFX& display, uint8_t bootCount) {
 
     // Firmware
     display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-    display.drawString("Cidinha Kitchen Dashboard v2.0", 8, y);
+    display.drawString("Portela v2.0", 8, y);
 
     drawBatteryWarning(display);
     drawScreenIndicator(display, 2, SCREEN_COUNT);
