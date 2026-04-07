@@ -1,36 +1,41 @@
 #include "weather_api.h"
 #include "config.h"
+#include "logger.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
 
 // Mapeamento de código WMO para descrição em português
 const char* wmoToDescription(int code) {
-    if (code == 0)                          return "Ceu limpo";
-    if (code >= 1  && code <= 3)            return "Parcialmente nublado";
-    if (code == 45 || code == 48)           return "Neblina";
-    if (code == 51 || code == 53 || code == 55) return "Chuvisco";
-    if (code == 61 || code == 63 || code == 65) return "Chuva";
-    if (code == 71 || code == 73 || code == 75) return "Neve";
-    if (code == 80 || code == 81 || code == 82) return "Pancadas de chuva";
-    if (code == 95)                         return "Trovoada";
+    if (code == 0)                                  return "Ceu limpo";
+    if (code >= 1  && code <= 3)                    return "Parcialmente nublado";
+    if (code == 45 || code == 48)                   return "Neblina";
+    if (code == 51 || code == 53 || code == 55)     return "Chuvisco";
+    if (code == 56 || code == 57)                   return "Chuvisco gelado";
+    if (code == 61 || code == 63 || code == 65)     return "Chuva";
+    if (code == 66 || code == 67)                   return "Chuva gelada";
+    if (code == 71 || code == 73 || code == 75)     return "Neve";
+    if (code == 77)                                 return "Granizo";
+    if (code == 80 || code == 81 || code == 82)     return "Pancadas de chuva";
+    if (code == 85 || code == 86)                   return "Pancadas de neve";
+    if (code == 95)                                 return "Trovoada";
+    if (code == 96 || code == 99)                   return "Trovoada c/ granizo";
     return "Variavel";
 }
 
 
 bool weatherFetch(WeatherData& out) {
-    // Guarda temperatura anterior para calcular tendência
     float prevTemp = out.valid ? out.tempCurrent : NAN;
 
-    // Monta URL — snprintf evita fragmentação de heap
-    char url[300];
+    // forecast_days=2 para suportar wrap de horas além de 23h (fix #5)
+    char url[320];
     snprintf(url, sizeof(url),
         "http://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code"
         "&hourly=temperature_2m,weather_code"
-        "&timezone=Asia%%2FTokyo&forecast_days=1",
+        "&timezone=Asia%%2FTokyo&forecast_days=2",
         GEO_LATITUDE, GEO_LONGITUDE);
 
     HTTPClient http;
@@ -39,7 +44,7 @@ bool weatherFetch(WeatherData& out) {
 
     int httpCode = http.GET();
     if (httpCode != 200) {
-        Serial.printf("[weather] Erro HTTP: %d\n", httpCode);
+        LOG_E("weather", "Erro HTTP: %d", httpCode);   // fix #6
         http.end();
         return false;
     }
@@ -47,21 +52,28 @@ bool weatherFetch(WeatherData& out) {
     String payload = http.getString();
     http.end();
 
-    // Filtro para economizar RAM no JsonDocument
     JsonDocument filter;
     filter["current"]["temperature_2m"] = true;
     filter["current"]["relative_humidity_2m"] = true;
     filter["current"]["weather_code"] = true;
     filter["daily"]["temperature_2m_max"][0] = true;
     filter["daily"]["temperature_2m_min"][0] = true;
-    filter["hourly"]["temperature_2m"][0] = true;
-    filter["hourly"]["weather_code"][0] = true;
+    filter["hourly"]["temperature_2m"] = true;
+    filter["hourly"]["weather_code"] = true;
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload,
                                                DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[weather] JSON erro: %s\n", err.c_str());
+        LOG_E("weather", "JSON erro: %s", err.c_str());   // fix #6
+        return false;
+    }
+
+    // Validação de campos obrigatórios (fix #14)
+    if (doc["current"]["temperature_2m"].isNull() ||
+        doc["current"]["weather_code"].isNull() ||
+        doc["daily"]["temperature_2m_max"][0].isNull()) {
+        LOG_E("weather", "Campos obrigatorios ausentes no JSON");
         return false;
     }
 
@@ -77,7 +89,7 @@ bool weatherFetch(WeatherData& out) {
     strncpy(out.description, wmoToDescription(out.weatherCode), sizeof(out.description) - 1);
     out.description[sizeof(out.description) - 1] = '\0';
 
-    // Previsão horária — próximas 6h a partir da hora atual
+    // Previsão horária — próximas 6h com wrap (fix #5, 48h de dados)
     struct tm timeinfo;
     int startHour = 0;
     if (getLocalTime(&timeinfo)) {
@@ -88,13 +100,27 @@ bool weatherFetch(WeatherData& out) {
         strncpy(out.lastUpdated, "--:--", sizeof(out.lastUpdated));
     }
     out.hourlyStartHour = startHour;
-    for (int i = 0; i < 6; i++) {
-        int idx = min(startHour + i, 23);  // clipa em 23h no fim do dia
-        out.hourlyTemp[i] = doc["hourly"]["temperature_2m"][idx].as<float>();
-        out.hourlyCode[i] = doc["hourly"]["weather_code"][idx].as<int>();
+
+    // Contar horas disponíveis no JSON
+    JsonArray hourlyTemps = doc["hourly"]["temperature_2m"];
+    JsonArray hourlyCodes = doc["hourly"]["weather_code"];
+    int available = min((int)hourlyTemps.size(), 48);
+    out.hourlyCount = 0;
+
+    for (int i = 0; i < min(available - startHour, 48); i++) {
+        int idx = startHour + i;
+        if (idx >= available) break;
+        out.hourlyTemp[i] = hourlyTemps[idx].as<float>();
+        out.hourlyCode[i] = hourlyCodes[idx].as<int>();
+        out.hourlyCount++;
     }
 
-    Serial.printf("[weather] OK — %.1f°C (prev %.1f°C), WMO:%d\n",
-                  out.tempCurrent, out.tempPrevious, out.weatherCode);
+    // Sparkline: adiciona temperatura atual ao histórico circular (item #17)
+    out.trendTemp[out.trendIdx] = out.tempCurrent;
+    out.trendIdx = (out.trendIdx + 1) % TREND_SAMPLES;
+    if (out.trendCount < TREND_SAMPLES) out.trendCount++;
+
+    LOG_I("weather", "OK — %.1f°C (prev %.1f°C), WMO:%d, %dh dados",
+          out.tempCurrent, out.tempPrevious, out.weatherCode, out.hourlyCount);
     return true;
 }

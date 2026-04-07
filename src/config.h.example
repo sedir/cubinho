@@ -23,18 +23,23 @@
 #define NTP_SERVER_2 "pool.ntp.org"
 
 // Limites de conforto térmico — usado na tela de clima para colorir temperatura
-#define COMFORT_TEMP_MIN  18.0f   // °C mínima para conforto
-#define COMFORT_TEMP_MAX  26.0f   // °C máxima para conforto
-#define COMFORT_HUM_MIN   40.0f   // % umidade mínima para conforto
-#define COMFORT_HUM_MAX   70.0f   // % umidade máxima para conforto
+#define COMFORT_TEMP_MIN  18.0f
+#define COMFORT_TEMP_MAX  26.0f
+#define COMFORT_HUM_MIN   40.0f
+#define COMFORT_HUM_MAX   70.0f
 
 // Intervalos de atualização
-#define WEATHER_UPDATE_INTERVAL_MS  (30UL * 60UL * 1000UL)  // 30 minutos entre buscas de clima
+#define WEATHER_UPDATE_INTERVAL_MS  (30UL * 60UL * 1000UL)  // 30 minutos
 
 // Gerenciamento de energia — brilho do display
 #define BRIGHTNESS_ACTIVE  150    // brilho normal (0–255)
 #define BRIGHTNESS_DIM      50    // brilho reduzido após inatividade (0–255)
 #define DIM_TIMEOUT_MS   30000    // ms sem toque → dim automático
+
+// Auto-brilho via sensor de luz LTR553 (sensor embutido)
+#define AUTO_BRIGHTNESS_ENABLED  true
+#define AUTO_BRIGHTNESS_MIN       30   // brilho mínimo auto (0–255)
+#define AUTO_BRIGHTNESS_MAX      200   // brilho máximo auto (0–255)
 
 // Deep sleep — ativa após este tempo sem toque (timer não pode estar ativo)
 #define DEEP_SLEEP_TIMEOUT_MS  (10UL * 60UL * 1000UL)  // 10 minutos
@@ -43,6 +48,15 @@
 #define DEEP_SLEEP_WAKEUP_GPIO  21
 
 // Sensor de proximidade LTR553 — threshold para acordar o display do dim
-// Valores de 0 a 2047; quanto maior, mais próximo precisa estar o objeto.
-// Ajuste conforme o ambiente: comece com 80 e aumente se houver falsos positivos.
 #define LTR553_PROX_THRESH  80
+
+// OTA — atualização sem fio (ativo apenas quando WiFi mantido por Telnet)
+#define OTA_ENABLED  true
+#define OTA_HOSTNAME "cidinha"
+
+// Timers de cozinha — número máximo de timers simultâneos
+#define MAX_TIMERS  3
+
+// Portal cativo WiFi — entra em modo AP para configuração após N falhas
+#define WIFI_PORTAL_FAIL_THRESHOLD  3
+#define WIFI_PORTAL_AP_NAME         "Cidinha-Setup"

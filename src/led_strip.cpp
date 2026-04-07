@@ -7,7 +7,6 @@
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
 
-// Brilho mínimo do breathing — nunca apaga completamente quando ativo
 #define BREATH_MIN   15
 #define BREATH_MAX  200
 
@@ -25,15 +24,12 @@ void ledOff() {
 }
 
 void ledUpdate(bool isDim, bool alarmActive, bool timerRunning) {
-    if (isDim) {
-        ledOff();
-        return;
-    }
+    if (isDim) { ledOff(); return; }
 
     uint32_t now = millis();
 
     if (alarmActive) {
-        // Pisca vermelho em sincronia com o display (ciclo 400ms)
+        // Pisca vermelho em sincronia com o display
         bool on = (now / 400) % 2 == 0;
         fill_solid(leds, LED_COUNT, CRGB::Red);
         FastLED.setBrightness(on ? 200 : 0);
@@ -41,13 +37,12 @@ void ledUpdate(bool isDim, bool alarmActive, bool timerRunning) {
         return;
     }
 
-    // Breathing: sin mapeado para [BREATH_MIN, BREATH_MAX]
+    // Breathing suave
     uint32_t period = timerRunning ? 2000UL : 3000UL;
-    float phase     = (float)(now % period) / (float)period;      // 0.0–1.0
-    float t         = (sinf(phase * 2.0f * (float)M_PI - (float)M_PI / 2.0f) + 1.0f) / 2.0f; // 0.0–1.0
+    float phase = (float)(now % period) / (float)period;
+    float t = (sinf(phase * 2.0f * (float)M_PI - (float)M_PI / 2.0f) + 1.0f) / 2.0f;
     uint8_t brightness = (uint8_t)(BREATH_MIN + t * (BREATH_MAX - BREATH_MIN));
 
-    // Verde quando rodando, laranja quente (cor do relógio) no idle
     CRGB color = timerRunning ? CRGB(0, 220, 60) : CRGB(255, 110, 20);
 
     fill_solid(leds, LED_COUNT, color);

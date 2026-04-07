@@ -2,27 +2,32 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include "config.h"
+#include "theme.h"
 #include "logger.h"
 #include "weather_api.h"
 #include "wifi_manager.h"
 #include "power_manager.h"
 #include "screen_home.h"
 #include "screen_weather.h"
+#include "screen_system.h"
 #include "screen_splash.h"
 #include "led_strip.h"
 #include "telnet_log.h"
+#include "ota_manager.h"
+#include "events.h"
+#include "chime_wav.h"
 
-// ── LTR553 — sensor de proximidade embutido (I2C interno 0x23) ───────────────
+// ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
-#define LTR553_PS_CONTR     0x81   // controle do PS: bits[1:0] 0x03 = active
-#define LTR553_PS_DATA_LOW  0x8D   // dado PS, byte baixo (bits 7:0)
-#define LTR553_PS_DATA_HIGH 0x8E   // dado PS, byte alto  (bits 2:0)
+#define LTR553_PS_CONTR     0x81
+#define LTR553_PS_DATA_LOW  0x8D
+#define LTR553_PS_DATA_HIGH 0x8E
 #define LTR553_I2C_FREQ     400000
 
 static void ltr553Init() {
     M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_PS_CONTR, 0x03, LTR553_I2C_FREQ);
     delay(10);
-    LOG_I("ltr553", "Sensor de proximidade iniciado (limiar=%d)", LTR553_PROX_THRESH);
+    LOG_I("ltr553", "Proximidade iniciado (limiar=%d)", LTR553_PROX_THRESH);
 }
 
 static uint16_t ltr553ReadProx() {
@@ -31,22 +36,24 @@ static uint16_t ltr553ReadProx() {
     return ((uint16_t)(hi & 0x07) << 8) | lo;
 }
 
-// ── Estado persistido no RTC (sobrevive ao deep sleep) ───────────────────────
+// ── Estado RTC ───────────────────────────────────────────────────────────────
 RTC_DATA_ATTR static uint8_t     rtcBootCount   = 0;
 RTC_DATA_ATTR static int         rtcScreen      = 0;
 RTC_DATA_ATTR static WeatherData rtcWeather     = {};
-RTC_DATA_ATTR static int         rtcTimerState  = 0;
-RTC_DATA_ATTR static int         rtcTimerPreset = 2;
-RTC_DATA_ATTR static uint32_t    rtcTimerRemain = 5 * 60000;
+RTC_DATA_ATTR static int         rtcTimerState[MAX_TIMERS]   = {};
+RTC_DATA_ATTR static int         rtcTimerMinutes[MAX_TIMERS] = { 5, 10, 15 };
+RTC_DATA_ATTR static uint32_t    rtcTimerRemain[MAX_TIMERS]  = { 300000, 600000, 900000 };
+RTC_DATA_ATTR static int         rtcTimerFocused = 0;
 
-// ── Estado volátil (loop) ────────────────────────────────────────────────────
+// ── Estado volátil ───────────────────────────────────────────────────────────
 static int         currentScreen = 0;
 static WeatherData weatherData   = {};
 static uint32_t    lastDrawMs    = 0;
 static bool        needsRedraw   = true;
 
-static LGFX_Sprite*     canvas = nullptr;
-static lgfx::LovyanGFX* fb     = nullptr;
+static LGFX_Sprite*     canvas     = nullptr;
+static LGFX_Sprite*     transSprite = nullptr;  // pré-alocado para transições
+static lgfx::LovyanGFX* fb         = nullptr;
 
 static bool     touchStartedInDim = false;
 static int      touchStartX       = 0;
@@ -57,7 +64,7 @@ static bool     alarmWasActive  = false;
 static uint32_t lastBeepMs      = 0;
 static uint8_t  lastDimMinute   = 255;
 
-// ── Orientação via acelerômetro ───────────────────────────────────────────────
+// ── Orientação via acelerômetro (apenas rotações 1 e 3 — item #7) ────────────
 static int      currentRotation  = 1;
 static uint32_t lastImuMs        = 0;
 
@@ -68,6 +75,7 @@ static void updateOrientation() {
     float ax, ay, az;
     if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
 
+    // Apenas rotações landscape (1 e 3) — sprite não precisa ser recriado
     int newRot = currentRotation;
     if      (ay >  0.4f) newRot = 1;
     else if (ay < -0.4f) newRot = 3;
@@ -75,6 +83,8 @@ static void updateOrientation() {
     if (newRot != currentRotation) {
         currentRotation = newRot;
         M5.Display.setRotation(newRot);
+        // Sprite recreation para rotações não-landscape (futuro, item #13)
+        // Rotações 1 e 3 mantêm mesmas dimensões, não precisa recriar.
         needsRedraw = true;
         LOG_I("imu", "Rotacao -> %d (ay=%.2f)", newRot, ay);
     }
@@ -82,17 +92,47 @@ static void updateOrientation() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 static void initSprite() {
+    // Item #13: libera sprites anteriores se existirem
+    if (canvas)     { delete canvas;     canvas     = nullptr; }
+    if (transSprite) { delete transSprite; transSprite = nullptr; }
+
+    int w = M5.Display.width(), h = M5.Display.height();
+    size_t spriteBytes = (size_t)w * h * 2;
+
+    LOG_I("main", "PSRAM livre: %u bytes, maior bloco: %u bytes, heap livre: %u bytes",
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+        heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    LOG_I("main", "Sprite necessita %u bytes cada (%dx%dx2)", spriteBytes, w, h);
+
     canvas = new LGFX_Sprite(&M5.Display);
     canvas->setColorDepth(16);
-    if (canvas->createSprite(M5.Display.width(), M5.Display.height())) {
+    if (canvas->createSprite(w, h)) {
         fb = canvas;
-        LOG_I("main", "Sprite alocado (%dx%d) — sem flickering",
-              M5.Display.width(), M5.Display.height());
+        LOG_I("main", "canvas alocado — PSRAM livre agora: %u bytes, maior bloco: %u bytes",
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
     } else {
         delete canvas;
         canvas = nullptr;
         fb = &M5.Display;
-        LOG_E("main", "Sprite nao alocado — usando display direto (flickering)");
+        LOG_E("main", "canvas nao alocado — fallback display direto");
+        return;
+    }
+
+    // Pré-aloca sprite de transição forçando PSRAM
+    transSprite = new LGFX_Sprite(&M5.Display);
+    transSprite->setColorDepth(16);
+    transSprite->setPsram(true);
+    if (!transSprite->createSprite(w, h)) {
+        delete transSprite;
+        transSprite = nullptr;
+        LOG_W("main", "transSprite nao alocado — PSRAM livre: %u bytes, maior bloco: %u bytes",
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    } else {
+        LOG_I("main", "transSprite alocado — PSRAM livre agora: %u bytes",
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     }
 }
 
@@ -100,68 +140,109 @@ static void pushFrame() {
     if (canvas) canvas->pushSprite(0, 0);
 }
 
+// ── Transição animada entre telas (item #25) ─────────────────────────────────
+static void drawCurrentScreen(lgfx::LovyanGFX& target) {
+    switch (currentScreen) {
+        case 0: screenHomeDraw(target, wifiIsFetching(), powerIsDim()); break;
+        case 1: screenWeatherDraw(target, weatherData, wifiIsFetching()); break;
+        case 2: screenSystemDraw(target, rtcBootCount); break;
+    }
+}
+
+static void animateTransition(int fromScreen, int toScreen, int direction) {
+    if (!canvas || !transSprite) {
+        LOG_W("main", "animateTransition: sprite indisponivel — troca instantânea");
+        currentScreen = toScreen;
+        return;
+    }
+    LOG_I("main", "animateTransition: %d -> %d (dir=%d)", fromScreen, toScreen, direction);
+    LGFX_Sprite* dest = transSprite;
+
+    // canvas já contém a tela antiga; desenha a nova no sprite temporário
+    int oldScreen = currentScreen;
+    currentScreen = toScreen;
+    drawCurrentScreen(*dest);
+    currentScreen = oldScreen;
+
+    // ── Animação suave com ease-out cúbico ──
+    // Composição dentro do canvas (sem coordenadas negativas):
+    // - canvas tem a tela antiga
+    // - a cada frame, desenha a porção esquerda de `dest` sobre a parte direita do canvas
+    // - o lado esquerdo do canvas (tela antiga) vai encolhendo naturalmente
+    const int FRAMES   = 12;
+    const int FRAME_MS = 16;   // ~60fps, ~190ms total
+    const int w        = M5.Display.width();
+    const int h        = M5.Display.height();
+
+    for (int i = 1; i <= FRAMES; i++) {
+        float t    = (float)i / (float)FRAMES;
+        float inv  = 1.0f - t;
+        float ease = 1.0f - (inv * inv * inv);
+        int   offset = (int)(ease * w);
+
+        if (direction >= 0) {
+            // Nova tela entra pela direita (swipe left → próxima)
+            dest->pushSprite(canvas, w - offset, 0);
+        } else {
+            // Nova tela entra pela esquerda (swipe right → anterior)
+            dest->pushSprite(canvas, -(w - offset), 0);
+        }
+        canvas->pushSprite(0, 0);
+        delay(FRAME_MS);
+    }
+
+    // canvas já contém o estado final (dest totalmente copiado).
+    // Redesenha para garantir estado limpo e atualizado.
+    currentScreen = toScreen;
+    drawCurrentScreen(*canvas);
+}
+
+// ── Eventos → próximo evento na home (item #24) ──────────────────────────────
+static void updateNextEvent() {
+    static uint32_t lastEventCheck = 0;
+    if (millis() - lastEventCheck < 30000) return;
+    lastEventCheck = millis();
+
+    Event next;
+    if (eventsGetNext(next)) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%02d/%02d %02d:%02d %s",
+                 next.day, next.month, next.hour, next.minute, next.name);
+        screenHomeSetNextEvent(buf);
+    } else {
+        screenHomeSetNextEvent("");
+    }
+}
+
 // ── Log periódico de sensores ────────────────────────────────────────────────
-// Emite status completo de todos os sensores a cada STATUS_LOG_INTERVAL_MS.
-#define STATUS_LOG_INTERVAL_MS  60000UL
+#define STATUS_LOG_INTERVAL_MS 60000UL
 
 static void logSensorStatus() {
     static uint32_t lastStatusMs = 0;
     if (millis() - lastStatusMs < STATUS_LOG_INTERVAL_MS) return;
     lastStatusMs = millis();
 
-    // Bateria e estado do display
-    int  batt     = batteryPercent();
+    int  batt = batteryPercent();
     bool charging = batteryIsCharging();
-    LOG_I("status", "bat=%d%% chg=%s dim=%s tela=%d boot#%u",
-          batt,
-          charging  ? "sim" : "nao",
-          powerIsDim() ? "sim" : "nao",
-          currentScreen,
-          (unsigned)rtcBootCount);
+    int  estimate = batteryGetEstimateMinutes();
+    LOG_I("status", "bat=%d%% chg=%s est=%dmin dim=%s tela=%d boot#%u",
+          batt, charging ? "sim" : "nao", estimate,
+          powerIsDim() ? "sim" : "nao", currentScreen, (unsigned)rtcBootCount);
 
-    // LTR553 — sensor de proximidade
     uint16_t prox = ltr553ReadProx();
-    LOG_I("ltr553", "prox=%u  limiar=%d  %s",
-          prox, LTR553_PROX_THRESH,
-          prox > LTR553_PROX_THRESH ? "ATIVADO" : "ok");
+    uint16_t lux  = powerReadAmbientLight();
+    LOG_I("sensor", "prox=%u lux=%u rot=%d", prox, lux, currentRotation);
 
-    // IMU — acelerômetro
-    float ax, ay, az;
-    if (M5.Imu.getAccel(&ax, &ay, &az)) {
-        LOG_I("imu", "ax=%.2f ay=%.2f az=%.2f  rot=%d", ax, ay, az, currentRotation);
-    } else {
-        LOG_W("imu", "Leitura indisponivel");
-    }
-
-    // WiFi — conectividade e sinal
     if (WiFi.status() == WL_CONNECTED) {
-        LOG_I("wifi", "Conectado  RSSI=%d dBm  IP=%s",
-              WiFi.RSSI(), WiFi.localIP().toString().c_str());
-    } else {
-        LOG_I("wifi", "Desconectado%s", wifiIsFetching() ? " (buscando...)" : "");
+        LOG_I("wifi", "Conectado RSSI=%d IP=%s OTA=%s",
+              WiFi.RSSI(), WiFi.localIP().toString().c_str(),
+              otaIsActive() ? "sim" : "nao");
     }
 
-    // Timer — estado atual
-    const char* timerState = "SETTING";
-    if      (screenHomeIsAlarmActive())  timerState = "ALARME";
-    else if (screenHomeIsTimerRunning()) timerState = "RUNNING";
-    else if (screenHomeIsTimerActive())  timerState = "PAUSED";
-    TimerPersist tp = screenHomeGetTimerPersist();
-    LOG_I("timer", "%s  preset=%d  remain=%lus",
-          timerState, tp.presetIdx, (unsigned long)(tp.remainMs / 1000));
-
-    // Clima — últimos dados recebidos
     if (weatherData.valid) {
-        LOG_I("clima", "temp=%.1fC max=%.1f min=%.1f umid=%.0f%% cod=%d (%s) upd=%s",
-              weatherData.tempCurrent,
-              weatherData.tempMax,
-              weatherData.tempMin,
-              weatherData.humidity,
-              weatherData.weatherCode,
-              weatherData.description,
-              weatherData.lastUpdated);
-    } else {
-        LOG_W("clima", "Sem dados validos");
+        LOG_I("clima", "%.1fC max=%.1f min=%.1f umid=%.0f%% trend=%d amostras",
+              weatherData.tempCurrent, weatherData.tempMax, weatherData.tempMin,
+              weatherData.humidity, weatherData.trendCount);
     }
 }
 
@@ -175,7 +256,7 @@ void setup() {
     auto cfg = M5.config();
     cfg.serial_baudrate = 115200;
     M5.begin(cfg);
-    M5.Speaker.setVolume(140);
+    M5.Speaker.setVolume(85);
 
     if (isColdBoot) {
         configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
@@ -193,14 +274,15 @@ void setup() {
     powerInit();
     screenHomeInit();
     telnetLogInit();
+    eventsInit();
 
     const char* wakeReason = isColdBoot  ? "cold-boot"  :
                              isTimerWake ? "timer-wake" : "touch-wake";
     LOG_I("main", "=== BOOT #%u (%s) ===", (unsigned)rtcBootCount, wakeReason);
 
-    // ── Wake silencioso por timer ──────────────────────────────────────────
+    // ── Wake silencioso por timer ──
     if (isTimerWake && rtcBootCount > 0) {
-        LOG_I("main", "Wake por timer — atualizando clima e voltando a dormir");
+        LOG_I("main", "Wake por timer — atualizando clima silenciosamente");
         M5.Display.setBrightness(0);
         weatherData = rtcWeather;
         wifiConnectAndFetch(weatherData);
@@ -210,13 +292,19 @@ void setup() {
         return;
     }
 
-    // ── Cold boot ou wake por toque ────────────────────────────────────────
+    // ── Cold boot ou wake por toque ──
     currentScreen = rtcScreen;
     weatherData   = rtcWeather;
 
     if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
         LOG_I("main", "Wake por toque — restaurando estado");
-        TimerPersist tp = { rtcTimerState, rtcTimerPreset, rtcTimerRemain };
+        TimerPersist tp;
+        tp.focused = rtcTimerFocused;
+        for (int i = 0; i < MAX_TIMERS; i++) {
+            tp.state[i]   = rtcTimerState[i];
+            tp.minutes[i] = rtcTimerMinutes[i];
+            tp.remainMs[i] = rtcTimerRemain[i];
+        }
         screenHomeSetTimerPersist(tp);
         wifiBeginAsync(weatherData);
     } else {
@@ -224,22 +312,51 @@ void setup() {
         drawSplash(*fb);
         pushFrame();
         wifiInit(weatherData);
+        wifiSetKeepAlive(WIFI_KEEP_ALIVE);
         rtcWeather = weatherData;
     }
 
     rtcBootCount++;
     telnetLogSetBoot(rtcBootCount);
     needsRedraw = true;
-    LOG_I("main", "Setup concluido — Telnet porta %d (apos WiFi) | SD: %s",
-          TELNET_LOG_PORT, "ver [sd] acima");
+    updateNextEvent();  // item #24
+    LOG_I("main", "Setup concluido");
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
     M5.update();
     telnetLogUpdate();
+    wifiPortalUpdate();   // item #23
+    otaUpdate();          // item #21
 
-    // ── Toque ────────────────────────────────────────────────────────────────
+    // ── Portal mode: tela de configuração ────
+    if (wifiIsPortalMode()) {
+        static uint32_t lastPortalDraw = 0;
+        if (millis() - lastPortalDraw > 2000) {
+            lastPortalDraw = millis();
+            fb->fillScreen(COLOR_BACKGROUND);
+            fb->setFont(&fonts::FreeSansBold18pt7b);
+            fb->setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
+            fb->setTextDatum(MC_DATUM);
+            fb->drawString("WiFi Setup", fb->width() / 2, 50);
+
+            fb->setFont(&fonts::FreeSans9pt7b);
+            fb->setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
+            fb->drawString("Conecte-se a rede:", fb->width() / 2, 100);
+            fb->setTextColor(COLOR_TIMER_RUNNING, COLOR_BACKGROUND);
+            fb->drawString(WIFI_PORTAL_AP_NAME, fb->width() / 2, 125);
+            fb->setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
+            fb->drawString("e acesse:", fb->width() / 2, 155);
+            fb->setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
+            fb->drawString("192.168.4.1", fb->width() / 2, 180);
+            pushFrame();
+        }
+        delay(50);
+        return;
+    }
+
+    // ── Toque ────
     auto touch = M5.Touch.getDetail();
 
     if (touch.wasPressed()) {
@@ -251,95 +368,131 @@ void loop() {
         if (touchStartedInDim) needsRedraw = true;
     }
 
-    if (touch.wasReleased() && !touchStartedInDim) {
-        uint32_t held      = millis() - touchStartMs;
-        bool     longPress = (held >= 800);
+    bool timerOrAlarm = screenHomeIsTimerActive() || screenHomeIsAlarmActive();
+    if (touch.wasReleased() && (!touchStartedInDim || timerOrAlarm)) {
+        uint32_t held        = millis() - touchStartMs;
+        bool     longPress   = (held >= 800);
+        int      swipeDeltaX = touch.x - touchStartX;
+        int      swipeDeltaY = touch.y - touchStartY;
+        bool     isSwipe     = (abs(swipeDeltaX) >= 30 && abs(swipeDeltaX) > abs(swipeDeltaY));
 
         if (currentScreen == 0 && screenHomeIsAlarmActive()) {
             screenHomeTimerTap(touchStartX);
             needsRedraw = true;
-        } else if (currentScreen == 0 && touchStartY >= 118) {
-            if (longPress) {
+        } else if (isSwipe) {
+            // Swipe horizontal → navega entre telas na direção do gesto
+            int dir       = (swipeDeltaX < 0) ? 1 : -1;
+            int newScreen = (currentScreen + dir + SCREEN_COUNT) % SCREEN_COUNT;
+            animateTransition(currentScreen, newScreen, dir);
+            currentScreen = newScreen;
+            needsRedraw   = true;
+            LOG_I("main", "Swipe %s -> tela %d", dir > 0 ? "esq" : "dir", currentScreen);
+        } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
+            // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)
+            if (touchStartY < TIMER_ZONE_Y + 26) {
+                // Toque na área dos tabs → switch slot
+                int tabW = 48, gap = 6;
+                int startX = 160 - (MAX_TIMERS * tabW + (MAX_TIMERS - 1) * gap) / 2;
+                for (int i = 0; i < MAX_TIMERS; i++) {
+                    int tx = startX + i * (tabW + gap);
+                    if (touchStartX >= tx && touchStartX <= tx + tabW) {
+                        screenHomeTimerSwitchSlot(i);
+                        needsRedraw = true;
+                        break;
+                    }
+                }
+            } else if (longPress) {
                 screenHomeTimerLongPress();
-                LOG_I("main", "Timer: long press");
+                LOG_I("main", "Timer T%d: long press", screenHomeGetFocusedSlot() + 1);
+                needsRedraw = true;
             } else {
                 screenHomeTimerTap(touchStartX);
-                LOG_I("main", "Timer: tap (x=%d)", touchStartX);
+                LOG_I("main", "Timer T%d: tap (x=%d)", screenHomeGetFocusedSlot() + 1, touchStartX);
+                needsRedraw = true;
             }
-            needsRedraw = true;
         } else if (!longPress) {
-            currentScreen = (currentScreen + 1) % 2;
+            // Tap fora da zona do timer → avança para próxima tela
+            int newScreen = (currentScreen + 1) % SCREEN_COUNT;
+            animateTransition(currentScreen, newScreen, 1);
+            currentScreen = newScreen;
             needsRedraw   = true;
-            LOG_I("main", "Tela -> %d", currentScreen);
+            LOG_I("main", "Tap -> tela %d", currentScreen);
         }
     }
 
-    // ── Proximidade — acorda do dim sem precisar tocar ───────────────────────
+    // ── Proximidade — acorda do dim ──
     static uint32_t lastProxMs = 0;
     if (powerIsDim() && (millis() - lastProxMs >= 100)) {
         lastProxMs = millis();
         uint16_t prox = ltr553ReadProx();
         if (prox > LTR553_PROX_THRESH) {
-            LOG_I("ltr553", "Proximidade detectada (%u > %d) — acordando display",
-                  prox, LTR553_PROX_THRESH);
+            LOG_I("ltr553", "Proximidade %u > %d — acordando", prox, LTR553_PROX_THRESH);
             powerOnTouch();
             needsRedraw = true;
         }
     }
 
-    // ── Orientação (acelerômetro) ────────────────────────────────────────────
+    // ── Orientação ──
     if (!powerIsDim()) updateOrientation();
 
-    // ── Dim por inatividade ───────────────────────────────────────────────────
+    // ── Dim ──
     bool wasDim = powerIsDim();
-    powerUpdate();
+    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
-    // ── WiFi / clima ─────────────────────────────────────────────────────────
+    // ── WiFi / clima ──
     wifiScheduleUpdate(weatherData);
+    wifiCheckPortal();  // item #23
 
-    // ── Deep sleep ───────────────────────────────────────────────────────────
+    // ── Eventos ──
+    updateNextEvent();
+
+    // ── Deep sleep ──
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
         powerShouldDeepSleep()) {
 
-        LOG_I("main", "Deep sleep — salvando estado (bat=%d%% tela=%d)",
-              batteryPercent(), currentScreen);
+        LOG_I("main", "Deep sleep — salvando estado");
         rtcScreen  = currentScreen;
         rtcWeather = weatherData;
 
         TimerPersist tp = screenHomeGetTimerPersist();
-        rtcTimerState  = tp.state;
-        rtcTimerPreset = tp.presetIdx;
-        rtcTimerRemain = tp.remainMs;
+        rtcTimerFocused = tp.focused;
+        for (int i = 0; i < MAX_TIMERS; i++) {
+            rtcTimerState[i]   = tp.state[i];
+            rtcTimerMinutes[i] = tp.minutes[i];
+            rtcTimerRemain[i]  = tp.remainMs[i];
+        }
 
         ledOff();
         powerEnterDeepSleep();
         return;
     }
 
-    // ── Alarme sonoro ─────────────────────────────────────────────────────────
+    // ── Alarme sonoro ──
     bool alarmActive = screenHomeIsAlarmActive();
     if (alarmActive) {
+        if (!alarmWasActive) {
+            M5.Speaker.setVolume(160);  // mais alto que a UI
+            lastBeepMs = 0;             // dispara o primeiro chime imediatamente
+        }
         uint32_t now = millis();
-        if (now - lastBeepMs >= 1800) {
-            M5.Speaker.tone(523, 200);
-            M5.Speaker.tone(659, 200);
-            M5.Speaker.tone(784, 500);
+        if (now - lastBeepMs >= 3200) {
+            M5.Speaker.playWav(CHIME_WAV, CHIME_WAV_LEN);
             lastBeepMs = now;
         }
-        if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0)) {
+        if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0))
             needsRedraw = true;
-        }
     } else if (alarmWasActive) {
         M5.Speaker.stop();
+        M5.Speaker.setVolume(85);  // restaura volume de UI
         LOG_I("main", "Alarme encerrado");
     }
     alarmWasActive = alarmActive;
 
-    // ── Log periódico de sensores ─────────────────────────────────────────────
+    // ── Log periódico ──
     logSensorStatus();
 
-    // ── Redesenho ─────────────────────────────────────────────────────────────
+    // ── Redesenho em dim ──
     if (powerIsDim() && currentScreen == 0 && !needsRedraw) {
         struct tm t;
         if (getLocalTime(&t, 0) && t.tm_sec == 0 && t.tm_min != lastDimMinute) {
@@ -349,19 +502,15 @@ void loop() {
     }
     if (!powerIsDim()) lastDimMinute = 255;
 
-    // ── LEDs ─────────────────────────────────────────────────────────────────
+    // ── LEDs ──
     ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
 
     if (powerIsDim() && !needsRedraw) { delay(100); return; }
 
     uint32_t now = millis();
-    bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400 : 1000));
+    bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400u : 1000u));
     if (needsRedraw || timeToRefresh) {
-        if (currentScreen == 0) {
-            screenHomeDraw(*fb, wifiIsFetching(), powerIsDim());
-        } else {
-            screenWeatherDraw(*fb, weatherData, wifiIsFetching());
-        }
+        drawCurrentScreen(*fb);
         pushFrame();
         lastDrawMs  = now;
         needsRedraw = false;
