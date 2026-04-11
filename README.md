@@ -1,17 +1,19 @@
 # M5 CoreS3 — Portela
 
-Firmware para M5Stack CoreS3 fixado na porta da geladeira. Exibe em alternância (toque na tela):
+Firmware para M5Stack CoreS3 fixado na porta da geladeira. Exibe em alternância via swipe ou toque na tela:
 
-- **Tela 0** — Relógio + timer regressivo de cozinha com alarme sonoro
+- **Tela 0** — Relógio + 3 timers regressivos de cozinha com alarme sonoro
 - **Tela 1** — Clima externo via API OpenMeteo (gratuita, sem cadastro)
+- **Tela 2** — Informações do sistema (bateria, IP, boot count, etc.)
+- **Tela 3** — Configurações em runtime (brilho, dim, WiFi, deep sleep, etc.)
 
-WiFi intermitente: conecta apenas a cada 30 minutos para buscar o clima e desliga em seguida. Deep sleep automático após inatividade — o sensor de proximidade LTR553 (embutido) acorda o display ao aproximar a mão.
+WiFi intermitente: conecta a cada 30 minutos para buscar o clima e desliga em seguida (ou keep-alive permanente se configurado). Deep sleep automático após inatividade — o sensor de proximidade LTR553 (embutido) e o acelerômetro acordam o display ao aproximar a mão ou detectar movimento.
 
 ---
 
 ## Requisitos
 
-- [PlatformIO](https://platformio.org/install) — instale como extensão do VS Code ou via CLI:
+- [PlatformIO](https://platformio.org/install) — extensão do VS Code ou CLI:
   ```
   pip install platformio
   ```
@@ -26,7 +28,7 @@ WiFi intermitente: conecta apenas a cada 30 minutos para buscar o clima e deslig
 
 ```bash
 git clone <url-do-repo>
-cd m5cores3-kitchen-dashboard
+cd cidinha
 ```
 
 ### 2. Crie seu `config.h`
@@ -35,7 +37,7 @@ cd m5cores3-kitchen-dashboard
 cp src/config.h.example src/config.h
 ```
 
-Abra `src/config.h` e preencha:
+Abra [src/config.h](src/config.h) e preencha:
 
 ```cpp
 #define WIFI_SSID     "nome_da_sua_rede"
@@ -57,7 +59,7 @@ pio run --target upload
 pio device monitor
 ```
 
-Ou use os botões da extensão PlatformIO no VS Code (ícones ✓ → para compilar, → para upload).
+Ou use os botões da extensão PlatformIO no VS Code.
 
 ---
 
@@ -65,25 +67,67 @@ Ou use os botões da extensão PlatformIO no VS Code (ícones ✓ → para compi
 
 ```
 src/
-├── main.cpp              — loop principal, inicialização, LTR553
-├── config.h              — suas credenciais (não commitado)
-├── config.h.example      — template de configuração
-├── screen_home.h/.cpp    — tela 0: relógio + timer
-├── screen_weather.h/.cpp — tela 1: clima externo
-├── screen_splash.h       — tela de boot (inline)
-├── battery_ui.h          — indicador de bateria (inline)
-├── power_manager.h/.cpp  — dim + deep sleep por inatividade
-├── wifi_manager.h/.cpp   — WiFi intermitente + async state machine
-└── weather_api.h/.cpp    — cliente API OpenMeteo + parse JSON
+├── main.cpp               — loop principal, inicialização, LTR553, acelerômetro
+├── config.h               — suas credenciais (não commitado)
+├── config.h.example       — template de configuração
+├── theme.h                — paleta de cores e constantes de layout
+├── logger.h               — macros LOG_I/W/E (Serial + Telnet)
+├── screen_home.h/.cpp     — tela 0: relógio + 3 timers com tabs
+├── screen_weather.h/.cpp  — tela 1: clima externo
+├── screen_system.h/.cpp   — tela 2: informações do sistema
+├── screen_settings.h/.cpp — tela 3: configurações em runtime com scroll
+├── screen_splash.h        — tela de boot (inline)
+├── battery_ui.h           — indicador de bateria (inline)
+├── power_manager.h/.cpp   — dim + deep sleep + auto-brilho ALS + fade suave
+├── wifi_manager.h/.cpp    — WiFi intermitente + async + portal cativo
+├── weather_api.h/.cpp     — cliente API OpenMeteo + parse JSON
+├── runtime_config.h/.cpp  — configurações persistidas em NVS
+├── led_strip.h/.cpp       — LEDs WS2812 M5GO3 Bottom (10 LEDs, GPIO5)
+├── telnet_log.h/.cpp      — log via Telnet porta 23 + SD card
+├── ota_manager.h/.cpp     — atualização OTA sem fio (ArduinoOTA)
+├── events.h/.cpp          — agenda de eventos do SD card (/events.json)
+└── chime_wav.h            — audio WAV do alarme (array PROGMEM)
 ```
+
+---
+
+## Funcionalidades
+
+### Timers de cozinha
+- 3 timers simultâneos com tabs para trocar o slot focado
+- Presets rápidos: 1, 3, 5, 10, 15, 20, 30 minutos
+- Alarme sonoro com WAV e display piscante ao atingir zero
+- Estado preservado através do deep sleep via `RTC_DATA_ATTR`
+
+### Clima
+- Temperatura atual, máxima, mínima e umidade
+- Ícones desenhados com primitivas M5GFX (sol, nuvem, chuva, neve, trovoada, neblina)
+- Long press na tela → força atualização imediata
+
+### Configurações em runtime (NVS)
+- WiFi keep-alive, intervalo do clima, brilho, timeout dim, auto-brilho, deep sleep, wake por acelerômetro
+- Alterações salvas imediatamente e aplicadas sem reboot
+
+### Economia de energia
+- Fade suave de brilho ao entrar/sair do dim
+- Auto-brilho via sensor ALS do LTR553 (ajusta ao ambiente)
+- Wake por proximidade (LTR553 PS), toque ou acelerômetro
+- Deep sleep com wake por toque (EXT0, GPIO21) ou timer (atualização do clima)
+- Orientação automática via acelerômetro (rotações landscape 1 e 3)
+
+### Conectividade
+- Portal cativo WiFi: após 3 falhas consecutivas, abre AP "Portela-Setup" para reconfiguraçção
+- OTA via ArduinoOTA (hostname "portela") quando keep-alive ativo
+- Log via Telnet (porta 23) e SD card quando disponível
 
 ---
 
 ## Notas de hardware
 
-- **Bateria**: 900mAh interna, gerenciada pelo AXP2101 (acessível via `M5.Power`)
-- **Proximidade**: LTR553 embutido (I2C `0x23`) — acorda o display do dim ao aproximar a mão; threshold ajustável via `LTR553_PROX_THRESH` em `config.h`
-- **Touch**: capacitivo FT6336U — acorda o dispositivo do deep sleep (INT no GPIO21)
+- **Bateria**: 900mAh interna, gerenciada pelo AXP2101 (`M5.Power`)
+- **Proximidade + luz**: LTR553 embutido (I2C `0x23`) — wake por proximidade e auto-brilho; threshold via `LTR553_PROX_THRESH`
+- **IMU**: acelerômetro para orientação automática e wake por movimento
+- **Touch**: capacitivo FT6336U — wake do deep sleep (INT no GPIO21)
 - **Display**: ILI9342C 320×240, landscape
-- **WiFi**: desligado entre as buscas para economizar energia
-- **Deep sleep**: ativa após `DEEP_SLEEP_TIMEOUT_MS` sem interação; wake por toque ou timer (atualização do clima)
+- **LEDs**: 10× WS2812 no módulo M5GO3 Bottom (GPIO5, FastLED)
+- **PSRAM**: 8MB — necessário para sprites framebuffer (~150KB cada)
