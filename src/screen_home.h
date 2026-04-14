@@ -5,6 +5,13 @@
 bool screenHomeInit();
 void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing = false, bool isDim = false);
 
+// Presets de nome dos timers
+int         screenHomeGetTimerLabelPresetCount();
+const char* screenHomeGetTimerLabelPresetName(int presetIdx);
+int         screenHomeGetTimerLabelPreset(int slot);
+const char* screenHomeGetTimerLabel(int slot);
+void        screenHomeSetTimerLabelPreset(int slot, int presetIdx);
+
 // Chamados pelo handler de toque em main.cpp
 void screenHomeTimerTap(int tapX);
 void screenHomeTimerLongPress();

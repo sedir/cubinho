@@ -1,9 +1,10 @@
 #include "screen_settings.h"
 #include "theme.h"
 #include "config.h"
-#include "battery_ui.h"
+#include "status_ui.h"
 #include "wifi_manager.h"
 #include "runtime_config.h"
+#include "screen_home.h"
 #include <M5Unified.h>
 
 // ── Layout interno ───────────────────────────────────────────────────────────
@@ -30,12 +31,16 @@ static const VEntry kEntries[] = {
     { EKIND_CYCLE,    "Brilho ativo"     },  // 5
     { EKIND_CYCLE,    "Tempo p/ dim"     },  // 6
     { EKIND_TOGGLE,   "Auto-brilho"      },  // 7
-    { EKIND_CATEGORY, "Energia"          },  // 8
-    { EKIND_CYCLE,    "Deep sleep"       },  // 9
-    { EKIND_TOGGLE,   "Acelerometro"     },  // 10 acorda do dim ao mover
-    { EKIND_CATEGORY, "Sistema"          },  // 11
-    { EKIND_ACTION,   "Reiniciar"        },  // 12 long press
-    { EKIND_ACTION,   "Reset de fabrica" },  // 13 long press
+    { EKIND_CATEGORY, "Timers"           },  // 8
+    { EKIND_CYCLE,    "Nome T1"          },  // 9
+    { EKIND_CYCLE,    "Nome T2"          },  // 10
+    { EKIND_CYCLE,    "Nome T3"          },  // 11
+    { EKIND_CATEGORY, "Energia"          },  // 12
+    { EKIND_CYCLE,    "Deep sleep"       },  // 13
+    { EKIND_TOGGLE,   "Acelerometro"     },  // 14 acorda do dim ao mover
+    { EKIND_CATEGORY, "Sistema"          },  // 15
+    { EKIND_ACTION,   "Reiniciar"        },  // 16 long press
+    { EKIND_ACTION,   "Reset de fabrica" },  // 17 long press
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -47,10 +52,13 @@ enum ItemIdx {
     IDX_BRIGHTNESS    = 5,
     IDX_DIM_TIMEOUT   = 6,
     IDX_AUTO_BRIGHT   = 7,
-    IDX_DEEP_SLEEP    = 9,
-    IDX_ACCEL_WAKE    = 10,
-    IDX_RESTART       = 12,
-    IDX_FACTORY_RESET = 13,
+    IDX_TIMER_LABEL_1 = 9,
+    IDX_TIMER_LABEL_2 = 10,
+    IDX_TIMER_LABEL_3 = 11,
+    IDX_DEEP_SLEEP    = 13,
+    IDX_ACCEL_WAKE    = 14,
+    IDX_RESTART       = 16,
+    IDX_FACTORY_RESET = 17,
 };
 
 // Opções de ciclo
@@ -102,6 +110,10 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
         case IDX_KEEP_ALIVE:  return cfg.wifiKeepAlive  ? "ON" : "OFF";
         case IDX_AUTO_BRIGHT: return cfg.autoBrightness ? "ON" : "OFF";
         case IDX_ACCEL_WAKE:  return cfg.accelWake      ? "ON" : "OFF";
+        case IDX_TIMER_LABEL_1:
+        case IDX_TIMER_LABEL_2:
+        case IDX_TIMER_LABEL_3:
+            return screenHomeGetTimerLabelPresetName(cfg.timerLabelPreset[entryIdx - IDX_TIMER_LABEL_1]);
         case IDX_WEATHER_INT: {
             int v = cfg.weatherIntervalMin;
             if (v < 60) { char buf[8]; snprintf(buf, sizeof(buf), "%dmin", v); return buf; }
@@ -268,6 +280,14 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
         case IDX_ACCEL_WAKE:
             cfg.accelWake = !cfg.accelWake;
             break;
+        case IDX_TIMER_LABEL_1:
+        case IDX_TIMER_LABEL_2:
+        case IDX_TIMER_LABEL_3: {
+            int slot = idx - IDX_TIMER_LABEL_1;
+            int count = screenHomeGetTimerLabelPresetCount();
+            cfg.timerLabelPreset[slot] = (cfg.timerLabelPreset[slot] + 1) % count;
+            break;
+        }
         case IDX_WEATHER_INT: {
             int i = findClosestIdx(kWeatherOpts, kWeatherCnt, cfg.weatherIntervalMin);
             cfg.weatherIntervalMin = kWeatherOpts[(i + 1) % kWeatherCnt];

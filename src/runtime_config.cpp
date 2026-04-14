@@ -2,6 +2,7 @@
 #include "config.h"
 #include "wifi_manager.h"
 #include "power_manager.h"
+#include "screen_home.h"
 #include <Preferences.h>
 
 static Preferences _prefs;
@@ -15,6 +16,11 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     cfg.autoBrightness      = _prefs.getBool("autoBright", AUTO_BRIGHTNESS_ENABLED);
     cfg.deepSleepTimeoutMin = _prefs.getInt ("sleepMin",   (int)(DEEP_SLEEP_TIMEOUT_MS / 60000UL));
     cfg.accelWake           = _prefs.getBool("accelWake",  ACCEL_WAKE_ENABLED);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        char key[12];
+        snprintf(key, sizeof(key), "tLabel%d", i);
+        cfg.timerLabelPreset[i] = _prefs.getInt(key, i);
+    }
     _prefs.end();
 }
 
@@ -27,6 +33,11 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.putBool("autoBright", cfg.autoBrightness);
     _prefs.putInt ("sleepMin",   cfg.deepSleepTimeoutMin);
     _prefs.putBool("accelWake",  cfg.accelWake);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        char key[12];
+        snprintf(key, sizeof(key), "tLabel%d", i);
+        _prefs.putInt(key, cfg.timerLabelPreset[i]);
+    }
     _prefs.end();
 }
 
@@ -42,6 +53,9 @@ void runtimeConfigApply(const RuntimeConfig& cfg) {
     powerSetDeepSleepTimeout(sleepMs);
     powerSetWeatherInterval((uint32_t)cfg.weatherIntervalMin * 60000UL);
     powerSetAccelWake(cfg.accelWake);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        screenHomeSetTimerLabelPreset(i, cfg.timerLabelPreset[i]);
+    }
 }
 
 void runtimeConfigClear() {

@@ -1,5 +1,5 @@
 #include "screen_system.h"
-#include "battery_ui.h"
+#include "status_ui.h"
 #include "theme.h"
 #include "config.h"
 #include "ota_manager.h"

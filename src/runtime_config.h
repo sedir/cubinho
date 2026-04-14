@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "config.h"
 
 struct RuntimeConfig {
     bool  wifiKeepAlive;        // WiFi permanente (keep-alive)
@@ -9,6 +10,7 @@ struct RuntimeConfig {
     bool  autoBrightness;       // Auto-brilho via sensor ALS
     int   deepSleepTimeoutMin;  // Timeout deep sleep (minutos, 0 = nunca)
     bool  accelWake;            // Acorda do dim ao detectar movimento
+    int   timerLabelPreset[MAX_TIMERS];  // Nome escolhido para cada slot
 };
 
 // Carrega configuração do NVS (usa defaults de config.h se namespace vazio).

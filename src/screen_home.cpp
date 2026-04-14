@@ -1,5 +1,5 @@
 #include "screen_home.h"
-#include "battery_ui.h"
+#include "status_ui.h"
 #include "theme.h"
 #include "config.h"
 #include <time.h>
@@ -7,6 +7,11 @@
 static const char* DIAS[]  = { "dom", "seg", "ter", "qua", "qui", "sex", "sab" };
 static const char* MESES[] = { "jan", "fev", "mar", "abr", "mai", "jun",
                                 "jul", "ago", "set", "out", "nov", "dez" };
+static const char* TIMER_LABEL_PRESETS[] = {
+    "Forno", "Massa", "Cafe", "Cha", "Sopa",
+    "Arroz", "Bolo", "Ovos", "Frango", "Livre"
+};
+static const int TIMER_LABEL_PRESET_COUNT = (int)(sizeof(TIMER_LABEL_PRESETS) / sizeof(TIMER_LABEL_PRESETS[0]));
 
 // ── Estado do timer — múltiplos slots (item #16) ─────────────────────────────
 enum TimerState { TIMER_SETTING, TIMER_RUNNING, TIMER_PAUSED, TIMER_DONE };
@@ -15,6 +20,7 @@ static TimerState timerStates[MAX_TIMERS]   = { TIMER_SETTING, TIMER_SETTING, TI
 static int        timerMinutes[MAX_TIMERS]  = { 5, 10, 15 };
 static uint32_t   timerRemainMs[MAX_TIMERS] = { 5*60000, 10*60000, 15*60000 };
 static uint32_t   timerStartMs[MAX_TIMERS]  = { 0, 0, 0 };
+static int        timerLabelPreset[MAX_TIMERS] = { 0, 1, 2 };
 static int        focusedSlot = 0;
 
 // Evento próximo (item #24)
@@ -24,6 +30,30 @@ static uint32_t getRemaining(int slot) {
     if (timerStates[slot] != TIMER_RUNNING) return timerRemainMs[slot];
     uint32_t elapsed = millis() - timerStartMs[slot];
     return (elapsed >= timerRemainMs[slot]) ? 0 : timerRemainMs[slot] - elapsed;
+}
+
+int screenHomeGetTimerLabelPresetCount() {
+    return TIMER_LABEL_PRESET_COUNT;
+}
+
+const char* screenHomeGetTimerLabelPresetName(int presetIdx) {
+    if (presetIdx < 0 || presetIdx >= TIMER_LABEL_PRESET_COUNT) return TIMER_LABEL_PRESETS[0];
+    return TIMER_LABEL_PRESETS[presetIdx];
+}
+
+int screenHomeGetTimerLabelPreset(int slot) {
+    if (slot < 0 || slot >= MAX_TIMERS) return 0;
+    return timerLabelPreset[slot];
+}
+
+const char* screenHomeGetTimerLabel(int slot) {
+    return screenHomeGetTimerLabelPresetName(screenHomeGetTimerLabelPreset(slot));
+}
+
+void screenHomeSetTimerLabelPreset(int slot, int presetIdx) {
+    if (slot < 0 || slot >= MAX_TIMERS) return;
+    if (presetIdx < 0 || presetIdx >= TIMER_LABEL_PRESET_COUNT) presetIdx = slot % TIMER_LABEL_PRESET_COUNT;
+    timerLabelPreset[slot] = presetIdx;
 }
 
 // ── API de controle ──────────────────────────────────────────────────────────
@@ -165,6 +195,81 @@ static void drawRightArrow(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
     d.fillTriangle(cx - 7, cy - 8, cx - 7, cy + 8, cx + 7, cy, c);
 }
 
+static void drawFocusedTimerLabel(lgfx::LovyanGFX& d, int slot, int y, uint16_t color) {
+    char label[32];
+    snprintf(label, sizeof(label), "T%d · %s", slot + 1, screenHomeGetTimerLabel(slot));
+    d.setFont(&fonts::Font0);
+    d.setTextColor(color, COLOR_BACKGROUND);
+    d.setTextDatum(MC_DATUM);
+    d.drawString(label, d.width() / 2, y);
+}
+
+static const int TIMER_LABEL_Y   = 148;
+static const int TIMER_VALUE_Y   = 176;
+static const int TIMER_HINT_Y    = 206;
+static const int TIMER_SUMMARY_Y = 198;
+
+static void trimSummary(char* text) {
+    size_t len = strlen(text);
+    while (len > 0 && text[len - 1] == ' ') {
+        text[--len] = '\0';
+    }
+}
+
+static void appendEllipsisToSummary(lgfx::LovyanGFX& d, char* text, size_t size, int maxWidth) {
+    trimSummary(text);
+    while (text[0] && d.textWidth(text) + d.textWidth("...") > maxWidth) {
+        size_t len = strlen(text);
+        if (len == 0) break;
+        text[len - 1] = '\0';
+        trimSummary(text);
+    }
+
+    if (text[0]) {
+        size_t len = strlen(text);
+        snprintf(text + len, size - len, "...");
+    }
+}
+
+static bool drawOtherTimersSummary(lgfx::LovyanGFX& d, int focused, int y) {
+    char summary[64] = "";
+    const int maxWidth = d.width() - 24;
+
+    d.setFont(&fonts::Font0);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (i == focused) continue;
+        if (timerStates[i] != TIMER_RUNNING && timerStates[i] != TIMER_PAUSED) continue;
+
+        uint32_t r = getRemaining(i);
+        char part[28];
+        snprintf(part, sizeof(part), "%s %02lu:%02lu", screenHomeGetTimerLabel(i),
+                 (unsigned long)(r / 60000), (unsigned long)((r / 1000) % 60));
+
+        char candidate[64];
+        if (summary[0]) snprintf(candidate, sizeof(candidate), "%s · %s", summary, part);
+        else            snprintf(candidate, sizeof(candidate), "%s", part);
+
+        if (d.textWidth(candidate) > maxWidth) {
+            if (!summary[0]) {
+                strncpy(summary, part, sizeof(summary) - 1);
+                summary[sizeof(summary) - 1] = '\0';
+            }
+            appendEllipsisToSummary(d, summary, sizeof(summary), maxWidth);
+            break;
+        }
+
+        strncpy(summary, candidate, sizeof(summary) - 1);
+        summary[sizeof(summary) - 1] = '\0';
+    }
+
+    if (!summary[0]) return false;
+
+    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    d.setTextDatum(MC_DATUM);
+    d.drawString(summary, d.width() / 2, y);
+    return true;
+}
+
 // ── Slot tabs (T1 T2 T3) ────────────────────────────────────────────────────
 static void drawSlotTabs(lgfx::LovyanGFX& d, int y) {
     d.setFont(&fonts::Font0);
@@ -253,17 +358,17 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
     // Verificar alarme em qualquer slot
     int alarmSlot = screenHomeAlarmSlot();
     if (alarmSlot >= 0) {
+        drawFocusedTimerLabel(display, alarmSlot, TIMER_LABEL_Y, COLOR_TEXT_ACCENT);
+
         uint16_t flash = ((millis() / 400) % 2 == 0) ? TFT_RED : COLOR_TEXT_PRIMARY;
         display.setFont(&fonts::FreeSansBold18pt7b);
         display.setTextColor(flash, COLOR_BACKGROUND);
         display.setTextDatum(MC_DATUM);
-        char alarmBuf[24];
-        snprintf(alarmBuf, sizeof(alarmBuf), "T%d PRONTO!", alarmSlot + 1);
-        display.drawString(alarmBuf, display.width() / 2, 168);
+        display.drawString("PRONTO!", display.width() / 2, TIMER_VALUE_Y);
 
         display.setFont(&fonts::FreeSans9pt7b);
         display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-        display.drawString("toque para fechar", display.width() / 2, 205);
+        display.drawString("toque para fechar", display.width() / 2, TIMER_HINT_Y);
     } else {
         // Verificar se algum running chegou a zero
         for (int i = 0; i < MAX_TIMERS; i++) {
@@ -282,6 +387,8 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         uint16_t timerColor = (timerStates[s] == TIMER_RUNNING) ? COLOR_TIMER_RUNNING
                             : (timerStates[s] == TIMER_PAUSED)  ? COLOR_TIMER_PAUSED
                             :                                      COLOR_TIMER_SETTING;
+        drawFocusedTimerLabel(display, s, TIMER_LABEL_Y, timerColor);
+        bool hasOtherSummary = drawOtherTimersSummary(display, s, TIMER_SUMMARY_Y);
 
         char tBuf[12];
         if (timerStates[s] == TIMER_SETTING) {
@@ -293,7 +400,7 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         }
 
         // Ícone + texto centralizados como par (ícone em x=106, texto em x=204)
-        const int timerY = 168;
+        const int timerY = TIMER_VALUE_Y;
         const int iconX  = display.width() / 2 - 54;  // 106
         const int textX  = display.width() / 2 + 44;  // 204
 
@@ -312,32 +419,19 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
             // Setas nas bordas — área de toque generosa
             drawLeftArrow(display, 22, timerY, COLOR_TEXT_SUBTLE);
             drawRightArrow(display, display.width() - 22, timerY, COLOR_TEXT_SUBTLE);
-            display.setFont(&fonts::FreeSans9pt7b);
-            display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-            display.setTextDatum(MC_DATUM);
-            display.drawString("Segurar: iniciar", display.width() / 2, 205);
+            if (!hasOtherSummary) {
+                display.setFont(&fonts::FreeSans9pt7b);
+                display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+                display.setTextDatum(MC_DATUM);
+                display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+            }
         } else if (timerStates[s] == TIMER_PAUSED) {
-            display.setFont(&fonts::FreeSans9pt7b);
-            display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-            display.setTextDatum(MC_DATUM);
-            display.drawString("Segurar: zerar", display.width() / 2, 205);
-        }
-
-        // Outros timers ativos (resumo compacto abaixo do hint)
-        display.setFont(&fonts::Font0);
-        int otherY = 218;
-        for (int i = 0; i < MAX_TIMERS; i++) {
-            if (i == s) continue;
-            if (timerStates[i] != TIMER_RUNNING && timerStates[i] != TIMER_PAUSED) continue;
-            uint32_t r = getRemaining(i);
-            char obuf[20];
-            snprintf(obuf, sizeof(obuf), "T%d: %02lu:%02lu", i + 1,
-                     (unsigned long)(r / 60000), (unsigned long)((r / 1000) % 60));
-            uint16_t col = (timerStates[i] == TIMER_RUNNING) ? COLOR_TIMER_RUNNING : COLOR_TIMER_PAUSED;
-            display.setTextColor(col, COLOR_BACKGROUND);
-            display.setTextDatum(MC_DATUM);
-            display.drawString(obuf, display.width() / 2, otherY);
-            otherY += 10;
+            if (!hasOtherSummary) {
+                display.setFont(&fonts::FreeSans9pt7b);
+                display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+                display.setTextDatum(MC_DATUM);
+                display.drawString("Segurar: zerar", display.width() / 2, TIMER_HINT_Y);
+            }
         }
     }
 

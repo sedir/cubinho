@@ -72,7 +72,7 @@ src/
 ├── screen_system.h/.cpp   — tela 2: informações do sistema
 ├── screen_settings.h/.cpp — tela 3: configurações em runtime com scroll
 ├── screen_splash.h        — tela de boot (inline)
-├── battery_ui.h           — indicador de bateria (inline)
+├── status_ui.h            — bateria + status/header helpers (inline)
 ├── power_manager.h/.cpp   — dim + deep sleep + auto-brilho ALS + fade suave
 ├── wifi_manager.h/.cpp    — WiFi intermitente + async + portal cativo
 ├── weather_api.h/.cpp     — cliente API OpenMeteo + parse JSON

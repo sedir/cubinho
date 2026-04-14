@@ -64,7 +64,7 @@ src/
 ├── screen_system.h/.cpp    ← tela 2: informações do sistema
 ├── screen_settings.h/.cpp  ← tela 3: configurações em runtime com scroll
 ├── screen_splash.h         ← tela de boot (inline)
-├── battery_ui.h            ← indicador de bateria (inline)
+├── status_ui.h             ← bateria + status/header helpers (inline)
 ├── power_manager.h/.cpp    ← dim + deep sleep + auto-brilho ALS + fade suave
 ├── wifi_manager.h/.cpp     ← WiFi intermitente + async + portal cativo
 ├── weather_api.h/.cpp      ← cliente OpenMeteo + parse JSON
@@ -425,14 +425,16 @@ NTP: sincronizado apenas no boot e após reconexões — RTC interno tem drift d
 
 ---
 
-## Indicador de bateria (`battery_ui.h`)
+## UI de status (`status_ui.h`)
 
-Ícone retangular desenhado no canto superior direito de todas as telas:
+Helpers inline desenhados no cabeçalho e rodapé das telas:
 - Corpo 24×12px + polo positivo (nub) 3×6px
 - Fill colorido proporcional: verde >50%, laranja 20–50%, vermelho ≤20%
 - Percentual numérico à esquerda do ícone em `Font0`
 - "+" centralizado no corpo quando carregando
 - `inline void drawBatteryIndicator(lgfx::LovyanGFX& display)`
+- `inline void drawBatteryWarning(lgfx::LovyanGFX& display, int y = 218)`
+- `inline void drawScreenIndicator(lgfx::LovyanGFX& display, int current, int total)`
 
 ---
 
