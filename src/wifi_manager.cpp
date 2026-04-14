@@ -243,11 +243,14 @@ bool wifiConnectAndFetch(WeatherData& out) {
     if (ntpOk) LOG_I("wifi", "NTP sincronizado");
     else       LOG_W("wifi", "NTP timeout");
 
-    bool ok = weatherFetch(out);
+    bool weatherOk = weatherFetch(out);
+    if (!weatherOk) {
+        LOG_W("wifi", "Clima indisponivel — mantendo ultimo dado valido");
+    }
     wifiOff();
     _firstFetch  = false;
     _lastFetchMs = millis();
-    return ok;
+    return true;
 }
 
 void wifiInit(WeatherData& weatherData) {

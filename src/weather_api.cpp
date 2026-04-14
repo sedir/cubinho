@@ -2,6 +2,7 @@
 #include "config.h"
 #include "logger.h"
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <time.h>
 
@@ -30,7 +31,7 @@ bool weatherFetch(WeatherData& out) {
     // forecast_days=2 para suportar wrap de horas além de 23h (fix #5)
     char url[320];
     snprintf(url, sizeof(url),
-        "http://api.open-meteo.com/v1/forecast"
+        "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code"
@@ -38,13 +39,20 @@ bool weatherFetch(WeatherData& out) {
         "&timezone=auto&forecast_days=2",
         GEO_LATITUDE, GEO_LONGITUDE);
 
+    WiFiClientSecure client;
+    client.setInsecure();
+
     HTTPClient http;
-    http.begin(url);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    if (!http.begin(client, url)) {
+        LOG_E("weather", "Falha ao iniciar HTTPClient");
+        return false;
+    }
     http.setTimeout(8000);
 
     int httpCode = http.GET();
     if (httpCode != 200) {
-        LOG_E("weather", "Erro HTTP: %d", httpCode);   // fix #6
+        LOG_E("weather", "Erro HTTP: %d (%s)", httpCode, http.errorToString(httpCode).c_str());
         http.end();
         return false;
     }

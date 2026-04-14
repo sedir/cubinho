@@ -23,5 +23,8 @@ bool screenSettingsHandleLongPress(int tapX, int tapY, int scrollOffset);
 // Retorna o scroll máximo em pixels (para clampar g_settingsScroll).
 int screenSettingsMaxScroll();
 
+// Retorna true se há um modal de confirmação aberto.
+bool screenSettingsIsConfirmOpen();
+
 // Tela do portal WiFi — exibida em fullscreen quando wifiIsPortalMode() == true.
 void drawWifiPortalScreen(lgfx::LovyanGFX& display);

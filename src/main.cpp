@@ -411,15 +411,19 @@ void loop() {
                                                    0, screenSettingsMaxScroll());
                 needsRedraw = true;
             } else if (longPress) {
+                bool hadConfirm = screenSettingsIsConfirmOpen();
                 screenSettingsHandleLongPress(touchStartX, touchStartY, (int)g_settingsScrollAnim);
+                if (hadConfirm != screenSettingsIsConfirmOpen()) needsRedraw = true;
                 // Se chegou aqui, nenhum restart ocorreu (ação não executada)
             } else {
+                bool hadConfirm = screenSettingsIsConfirmOpen();
                 if (screenSettingsHandleTap(touchStartX, touchStartY,
                                              g_runtimeCfg, (int)g_settingsScrollAnim)) {
                     runtimeConfigSave(g_runtimeCfg);
                     runtimeConfigApply(g_runtimeCfg);
                     needsRedraw = true;
                 }
+                if (hadConfirm != screenSettingsIsConfirmOpen()) needsRedraw = true;
             }
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)

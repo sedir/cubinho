@@ -10,37 +10,39 @@
 // ── Layout interno ───────────────────────────────────────────────────────────
 static const int FOOTER_H   = 18;
 static const int CAT_H      = 22;  // altura de label de categoria
-static const int ROW_H      = 30;  // altura de cada item
+static const int ROW_H      = 40;  // altura de cada item
 static const int CONTENT_H  = 240 - SETTINGS_HEADER_H - 4 - FOOTER_H;  // 194px
 
 // Tipos de entrada na lista virtual
 enum EntryKind { EKIND_CATEGORY, EKIND_TOGGLE, EKIND_CYCLE, EKIND_ACTION };
+enum ConfirmAction { CONFIRM_NONE, CONFIRM_WIFI_CHANGE, CONFIRM_RESTART, CONFIRM_FACTORY_RESET };
 
 struct VEntry {
     EntryKind   kind;
     const char* label;
+    const char* hint;
 };
 
 // Lista virtual completa (ordem fixa)
 static const VEntry kEntries[] = {
-    { EKIND_CATEGORY, "Conexao"          },  // 0
-    { EKIND_TOGGLE,   "WiFi permanente"  },  // 1
-    { EKIND_CYCLE,    "Intervalo clima"  },  // 2
-    { EKIND_ACTION,   "Alterar WiFi"     },  // 3  long press
-    { EKIND_CATEGORY, "Display"          },  // 4
-    { EKIND_CYCLE,    "Brilho ativo"     },  // 5
-    { EKIND_CYCLE,    "Tempo p/ dim"     },  // 6
-    { EKIND_TOGGLE,   "Auto-brilho"      },  // 7
-    { EKIND_CATEGORY, "Timers"           },  // 8
-    { EKIND_CYCLE,    "Nome T1"          },  // 9
-    { EKIND_CYCLE,    "Nome T2"          },  // 10
-    { EKIND_CYCLE,    "Nome T3"          },  // 11
-    { EKIND_CATEGORY, "Energia"          },  // 12
-    { EKIND_CYCLE,    "Deep sleep"       },  // 13
-    { EKIND_TOGGLE,   "Acelerometro"     },  // 14 acorda do dim ao mover
-    { EKIND_CATEGORY, "Sistema"          },  // 15
-    { EKIND_ACTION,   "Reiniciar"        },  // 16 long press
-    { EKIND_ACTION,   "Reset de fabrica" },  // 17 long press
+    { EKIND_CATEGORY, "Conexao",         nullptr                         },  // 0
+    { EKIND_TOGGLE,   "WiFi permanente", "Mantem OTA e Telnet ativos"   },  // 1
+    { EKIND_CYCLE,    "Intervalo clima", "Busca novos dados automaticamente" },  // 2
+    { EKIND_ACTION,   "Alterar WiFi",    "Apaga credenciais e abre portal" },  // 3
+    { EKIND_CATEGORY, "Display",         nullptr                         },  // 4
+    { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal" },  // 5
+    { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho" },  // 6
+    { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"      },  // 7
+    { EKIND_CATEGORY, "Timers",          nullptr                         },  // 8
+    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial" },  // 9
+    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial" },  // 10
+    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial" },  // 11
+    { EKIND_CATEGORY, "Energia",         nullptr                         },  // 12
+    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"    },  // 13
+    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"        },  // 14
+    { EKIND_CATEGORY, "Sistema",         nullptr                         },  // 15
+    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"     },  // 16
+    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"    },  // 17
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -70,6 +72,7 @@ static const int kWeatherCnt  = 4;
 static const int kBrightCnt   = 5;
 static const int kDimCnt      = 5;
 static const int kSleepCnt    = 5;
+static ConfirmAction g_confirmAction = CONFIRM_NONE;
 
 // ── Altura virtual de cada entrada ──────────────────────────────────────────
 static int entryHeight(int idx) {
@@ -135,6 +138,24 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
     }
 }
 
+static const char* confirmTitle() {
+    switch (g_confirmAction) {
+        case CONFIRM_WIFI_CHANGE:   return "Alterar WiFi?";
+        case CONFIRM_RESTART:       return "Reiniciar?";
+        case CONFIRM_FACTORY_RESET: return "Reset de fabrica?";
+        default:                    return "";
+    }
+}
+
+static const char* confirmBody() {
+    switch (g_confirmAction) {
+        case CONFIRM_WIFI_CHANGE:   return "Limpa as credenciais e abre o portal no proximo boot.";
+        case CONFIRM_RESTART:       return "Reinicia o aparelho imediatamente.";
+        case CONFIRM_FACTORY_RESET: return "Apaga WiFi e configuracoes salvas.";
+        default:                    return "";
+    }
+}
+
 // ── Desenho de um item ───────────────────────────────────────────────────────
 static void drawEntry(lgfx::LovyanGFX& d, int entryIdx, int screenY,
                       const RuntimeConfig& cfg, bool highlighted) {
@@ -164,14 +185,20 @@ static void drawEntry(lgfx::LovyanGFX& d, int entryIdx, int screenY,
     d.setFont(&fonts::FreeSans9pt7b);
     d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
     d.setTextDatum(ML_DATUM);
-    d.drawString(e.label, 12, screenY + h / 2);
+    d.drawString(e.label, 12, screenY + 13);
+
+    if (e.hint) {
+        d.setFont(&fonts::Font0);
+        d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+        d.drawString(e.hint, 12, screenY + 29);
+    }
 
     // Valor / badge à direita
     if (e.kind == EKIND_ACTION) {
         // Indicador "pressione" — seta para a direita
         d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
         d.setTextDatum(MR_DATUM);
-        d.drawString("segurar >", 312, screenY + h / 2);
+        d.drawString("segurar >", 312, screenY + 20);
     } else {
         // Toggle ou ciclo: badge com valor
         String val = valueLabel(entryIdx, cfg);
@@ -187,7 +214,7 @@ static void drawEntry(lgfx::LovyanGFX& d, int entryIdx, int screenY,
 
         int bw = val.length() * 7 + 14;
         int bx = 316 - bw;
-        int by = screenY + (h - 18) / 2;
+        int by = screenY + 11;
 
         d.fillRoundRect(bx, by, bw, 18, 4, badgeBg);
         d.setFont(&fonts::Font0);
@@ -195,6 +222,41 @@ static void drawEntry(lgfx::LovyanGFX& d, int entryIdx, int screenY,
         d.setTextDatum(MC_DATUM);
         d.drawString(val.c_str(), bx + bw / 2, by + 9);
     }
+}
+
+static void drawConfirmModal(lgfx::LovyanGFX& d) {
+    if (g_confirmAction == CONFIRM_NONE) return;
+
+    const int w = 268, h = 120;
+    const int x = (d.width() - w) / 2;
+    const int y = (d.height() - h) / 2 + 4;
+
+    d.fillRect(0, 0, d.width(), d.height(), 0x0841);
+    d.fillRoundRect(x, y, w, h, 8, 0x18C3);
+    d.drawRoundRect(x, y, w, h, 8, COLOR_TEXT_DIM);
+
+    d.setFont(&fonts::FreeSans9pt7b);
+    d.setTextColor(COLOR_TEXT_PRIMARY, 0x18C3);
+    d.setTextDatum(MC_DATUM);
+    d.drawString(confirmTitle(), x + w / 2, y + 20);
+
+    d.setFont(&fonts::Font0);
+    d.setTextColor(COLOR_TEXT_DIM, 0x18C3);
+    d.drawString(confirmBody(), x + w / 2, y + 48);
+
+    const int btnY = y + 78;
+    const int btnW = 96;
+    const int btnH = 24;
+    const int cancelX = x + 22;
+    const int confirmX = x + w - btnW - 22;
+
+    d.fillRoundRect(cancelX, btnY, btnW, btnH, 5, 0x2945);
+    d.fillRoundRect(confirmX, btnY, btnW, btnH, 5, 0x8000);
+
+    d.setTextColor(COLOR_TEXT_PRIMARY, 0x2945);
+    d.drawString("Cancelar", cancelX + btnW / 2, btnY + btnH / 2);
+    d.setTextColor(COLOR_TEXT_PRIMARY, 0x8000);
+    d.drawString("Confirmar", confirmX + btnW / 2, btnY + btnH / 2);
 }
 
 // ── Draw principal ───────────────────────────────────────────────────────────
@@ -248,6 +310,8 @@ void screenSettingsDraw(lgfx::LovyanGFX& d, const RuntimeConfig& cfg, int scroll
 
     // Bateria
     drawBatteryIndicator(d);
+
+    drawConfirmModal(d);
 }
 
 // ── Hit test: converte coordenada de tela em índice de entrada ────────────────
@@ -265,6 +329,51 @@ static int hitTestEntry(int tapY, int scrollOffset) {
 // ── Tap: cicla ou toggle ──────────────────────────────────────────────────────
 bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollOffset) {
     (void)tapX;
+    if (g_confirmAction != CONFIRM_NONE) {
+        const int w = 268, h = 120;
+        const int x = (320 - w) / 2;
+        const int y = (240 - h) / 2 + 4;
+        const int btnY = y + 78;
+        const int btnW = 96;
+        const int btnH = 24;
+        const int cancelX = x + 22;
+        const int confirmX = x + w - btnW - 22;
+
+        bool onCancel = (tapX >= cancelX && tapX <= cancelX + btnW &&
+                         tapY >= btnY && tapY <= btnY + btnH);
+        bool onConfirm = (tapX >= confirmX && tapX <= confirmX + btnW &&
+                          tapY >= btnY && tapY <= btnY + btnH);
+
+        if (onCancel) {
+            g_confirmAction = CONFIRM_NONE;
+            return false;
+        }
+        if (onConfirm) {
+            ConfirmAction action = g_confirmAction;
+            g_confirmAction = CONFIRM_NONE;
+            switch (action) {
+                case CONFIRM_WIFI_CHANGE:
+                    wifiClearStoredCredentials();
+                    delay(200);
+                    ESP.restart();
+                    break;
+                case CONFIRM_RESTART:
+                    delay(200);
+                    ESP.restart();
+                    break;
+                case CONFIRM_FACTORY_RESET:
+                    wifiClearStoredCredentials();
+                    runtimeConfigClear();
+                    delay(200);
+                    ESP.restart();
+                    break;
+                default:
+                    break;
+            }
+        }
+        return false;
+    }
+
     int idx = hitTestEntry(tapY, scrollOffset);
     if (idx < 0) return false;
     const VEntry& e = kEntries[idx];
@@ -316,30 +425,28 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
 // ── Long press: ações ─────────────────────────────────────────────────────────
 bool screenSettingsHandleLongPress(int tapX, int tapY, int scrollOffset) {
     (void)tapX;
+    if (g_confirmAction != CONFIRM_NONE) return false;
     int idx = hitTestEntry(tapY, scrollOffset);
     if (idx < 0) return false;
     if (kEntries[idx].kind != EKIND_ACTION) return false;
 
     switch (idx) {
         case IDX_WIFI_CHANGE:
-            // Limpa credenciais WiFi e reinicia → wifiInit() vai abrir portal
-            wifiClearStoredCredentials();
-            delay(200);
-            ESP.restart();
+            g_confirmAction = CONFIRM_WIFI_CHANGE;
             break;
         case IDX_RESTART:
-            delay(200);
-            ESP.restart();
+            g_confirmAction = CONFIRM_RESTART;
             break;
         case IDX_FACTORY_RESET:
-            wifiClearStoredCredentials();
-            runtimeConfigClear();
-            delay(200);
-            ESP.restart();
+            g_confirmAction = CONFIRM_FACTORY_RESET;
             break;
         default: return false;
     }
-    return true;
+    return false;
+}
+
+bool screenSettingsIsConfirmOpen() {
+    return g_confirmAction != CONFIRM_NONE;
 }
 
 // ── Tela do portal WiFi ───────────────────────────────────────────────────────
