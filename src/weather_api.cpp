@@ -35,7 +35,7 @@ bool weatherFetch(WeatherData& out) {
         "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code"
         "&hourly=temperature_2m,weather_code"
-        "&timezone=Asia%%2FTokyo&forecast_days=2",
+        "&timezone=auto&forecast_days=2",
         GEO_LATITUDE, GEO_LONGITUDE);
 
     HTTPClient http;

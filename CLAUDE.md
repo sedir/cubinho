@@ -83,8 +83,6 @@ src/
 ```cpp
 #pragma once
 
-#define WIFI_SSID     "ssid"
-#define WIFI_PASSWORD "senha"
 #define WIFI_KEEP_ALIVE false  // true = WiFi sempre conectado (habilita OTA e Telnet)
 
 #define GEO_LATITUDE         36.3938
@@ -124,6 +122,10 @@ src/
 
 // Sensor de proximidade LTR553
 #define LTR553_PROX_THRESH  10   // 0–2047
+
+// Wake por acelerômetro enquanto o display está em dim
+#define ACCEL_WAKE_ENABLED    true
+#define ACCEL_WAKE_THRESHOLD  0.18f
 
 // OTA
 #define OTA_ENABLED   true

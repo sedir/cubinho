@@ -240,7 +240,6 @@ void telnetLogUpdate() {
 
     if (_client && !_client.connected()) {
         Serial.println("[telnet] Cliente desconectado");
-        wifiSetKeepAlive(false);
         _client.stop();
         _flushed = false;
     }
@@ -251,7 +250,6 @@ void telnetLogUpdate() {
             _client = c;
             _flushed = false;
             _client.setNoDelay(true);
-            wifiSetKeepAlive(true);
             Serial.printf("[telnet] Cliente: %s\n", _client.remoteIP().toString().c_str());
         }
     }

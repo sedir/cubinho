@@ -2,6 +2,7 @@
 #include "battery_ui.h"
 #include "theme.h"
 #include "config.h"
+#include <string.h>
 #include <math.h>
 
 // ── Nuvem ────────────────────────────────────────────────────────────────────
@@ -169,6 +170,110 @@ static int drawTempC(lgfx::LovyanGFX &d, const char *prefix, float val, int deci
     return x2 + 7 + d.textWidth("C");
 }
 
+static void trimTrailingSpaces(char* text)
+{
+    int len = (int)strlen(text);
+    while (len > 0 && text[len - 1] == ' ')
+    {
+        text[--len] = '\0';
+    }
+}
+
+static void appendEllipsisToFit(lgfx::LovyanGFX& d, char* text, int maxWidth)
+{
+    static const char kDots[] = "...";
+    trimTrailingSpaces(text);
+
+    while (text[0] && d.textWidth(text) + d.textWidth(kDots) > maxWidth)
+    {
+        size_t len = strlen(text);
+        if (len == 0) break;
+        text[len - 1] = '\0';
+        trimTrailingSpaces(text);
+    }
+
+    if (text[0])
+    {
+        size_t len = strlen(text);
+        snprintf(text + len, 48 - len, "%s", kDots);
+    }
+    else
+    {
+        strncpy(text, kDots, 4);
+    }
+}
+
+static void drawWrappedCenteredText(lgfx::LovyanGFX& d, const char* text, int centerX,
+                                    int topY, int maxWidth, int lineHeight, int maxLines)
+{
+    if (!text || !text[0] || maxLines <= 0) return;
+
+    const char* p = text;
+    char line[48];
+
+    for (int lineIdx = 0; lineIdx < maxLines && *p; ++lineIdx)
+    {
+        while (*p == ' ') ++p;
+        if (!*p) break;
+
+        line[0] = '\0';
+        bool usedWord = false;
+
+        while (*p)
+        {
+            while (*p == ' ') ++p;
+            if (!*p) break;
+
+            char word[24];
+            int wlen = 0;
+            while (p[wlen] && p[wlen] != ' ' && wlen < (int)sizeof(word) - 1)
+            {
+                word[wlen] = p[wlen];
+                ++wlen;
+            }
+            word[wlen] = '\0';
+
+            char candidate[48];
+            if (usedWord) snprintf(candidate, sizeof(candidate), "%s %s", line, word);
+            else          snprintf(candidate, sizeof(candidate), "%s", word);
+
+            if (usedWord && d.textWidth(candidate) > maxWidth)
+            {
+                break;
+            }
+
+            strncpy(line, candidate, sizeof(line) - 1);
+            line[sizeof(line) - 1] = '\0';
+            usedWord = true;
+            p += wlen;
+
+            if (!usedWord) break;
+
+            while (*p == ' ') ++p;
+
+            if (!usedWord || d.textWidth(line) > maxWidth)
+            {
+                break;
+            }
+        }
+
+        if (!usedWord)
+        {
+            strncpy(line, text, sizeof(line) - 1);
+            line[sizeof(line) - 1] = '\0';
+        }
+
+        if (lineIdx == maxLines - 1)
+        {
+            while (*p == ' ') ++p;
+            if (*p) appendEllipsisToFit(d, line, maxWidth);
+        }
+
+        d.setTextDatum(MC_DATUM);
+        d.drawString(line, centerX, topY + lineIdx * lineHeight);
+    }
+}
+
 // ── Sparkline — gráfico de tendência 24h (item #17) ──────────────────────────
 static void drawSparkline(lgfx::LovyanGFX &d, const WeatherData &data, int x, int y, int w, int h)
 {
@@ -300,8 +405,7 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
 
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-    display.setTextDatum(MC_DATUM);
-    display.drawString(data.description, LEFT_CX, 88);
+    drawWrappedCenteredText(display, data.description, LEFT_CX, 82, 132, 18, 2);
 
     // Separador vertical entre colunas
     display.drawFastVLine(150, 20, 90, COLOR_DIVIDER);

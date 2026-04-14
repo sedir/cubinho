@@ -33,6 +33,10 @@ static uint8_t _targetBrightness    = BRIGHTNESS_ACTIVE;
 static uint8_t _brightnessBeforeDim = BRIGHTNESS_ACTIVE;  // salvo antes do dim
 static uint32_t _lastFadeMs         = 0;
 
+static uint8_t clampBrightness(int brightness) {
+    return (uint8_t)constrain(brightness, 0, 255);
+}
+
 static void alsInit() {
     // ALS_CONTR: active mode, gain 1x
     M5.In_I2C.writeRegister8(LTR553_ADDR, LTR553_ALS_CONTR, 0x01, LTR553_I2C_FREQ);
@@ -64,8 +68,6 @@ static void applyBrightnessFade() {
         _currentBrightness = (next < _targetBrightness) ? _targetBrightness : (uint8_t)next;
     }
 
-    // Piso absoluto — nunca abaixo do mínimo configurado
-    if (_currentBrightness < BRIGHTNESS_MIN_FLOOR) _currentBrightness = BRIGHTNESS_MIN_FLOOR;
     M5.Display.setBrightness(_currentBrightness);
 }
 
@@ -89,8 +91,7 @@ static void updateAutoBrightnessTarget() {
         target = AUTO_BRIGHTNESS_MIN + (int)(ratio * (AUTO_BRIGHTNESS_MAX - AUTO_BRIGHTNESS_MIN));
     }
     // EMA leve no alvo para evitar jitter no sensor
-    _targetBrightness = (_targetBrightness * 3 + (uint8_t)target) / 4;
-    if (_targetBrightness < BRIGHTNESS_MIN_FLOOR) _targetBrightness = BRIGHTNESS_MIN_FLOOR;
+    _targetBrightness = clampBrightness((_targetBrightness * 3 + (uint8_t)target) / 4);
 }
 
 // ── Estimativa de bateria (item #22) ─────────────────────────────────────────
@@ -136,8 +137,8 @@ int batteryGetEstimateMinutes() {
 void powerInit() {
     _lastTouchMs = millis();
     _powerState  = POWER_ACTIVE;
-    _currentBrightness = _brightnessActiveRt;
-    _targetBrightness  = _brightnessActiveRt;
+    _currentBrightness = clampBrightness(_brightnessActiveRt);
+    _targetBrightness  = clampBrightness(_brightnessActiveRt);
     M5.Display.setBrightness(_brightnessActiveRt);
     alsInit();
 }
@@ -147,7 +148,7 @@ void powerOnTouch() {
     if (_powerState == POWER_DIM) {
         _powerState = POWER_ACTIVE;
         // Restaura brilho salvo antes do dim, mas respeita o limite ativo configurado
-        _targetBrightness = min((int)_brightnessBeforeDim, _brightnessActiveRt);
+        _targetBrightness = clampBrightness(min((int)_brightnessBeforeDim, _brightnessActiveRt));
         LOG_I("power", "Display restaurado — ACTIVE (fade)");
     }
 }
@@ -168,15 +169,14 @@ void powerUpdate(bool keepAwake) {
         return;
     }
 
-    uint8_t dimFloor = BRIGHTNESS_DIM > BRIGHTNESS_MIN_FLOOR
-                     ? BRIGHTNESS_DIM : BRIGHTNESS_MIN_FLOOR;
+    uint8_t dimTarget = clampBrightness(BRIGHTNESS_DIM);
 
     // Bateria critica: dim após timeout normal
     if (pct >= 0 && pct <= 10 && _powerState == POWER_ACTIVE) {
         if (millis() - _lastTouchMs > _dimTimeoutMs) {
             _brightnessBeforeDim = _currentBrightness;
             _powerState = POWER_DIM;
-            _targetBrightness = dimFloor;  // fade suave até dim
+            _targetBrightness = dimTarget;  // fade suave até dim
             LOG_I("power", "Bateria <= 10%% — dim (fade)");
         }
         // Fade continua rodando mesmo durante bateria crítica
@@ -189,7 +189,7 @@ void powerUpdate(bool keepAwake) {
         (millis() - _lastTouchMs > _dimTimeoutMs)) {
         _brightnessBeforeDim = _currentBrightness;
         _powerState = POWER_DIM;
-        _targetBrightness = dimFloor;  // fade suave até dim
+        _targetBrightness = dimTarget;  // fade suave até dim
         LOG_I("power", "Inatividade — display em dim (fade)");
     }
 
@@ -234,9 +234,9 @@ bool batteryIsCharging() {
 
 // ── Setters de configuração runtime ─────────────────────────────────────────
 void powerSetBrightnessActive(int brightness) {
-    _brightnessActiveRt = constrain(brightness, BRIGHTNESS_MIN_FLOOR, 255);
+    _brightnessActiveRt = clampBrightness(brightness);
     if (_powerState == POWER_ACTIVE) {
-        _targetBrightness = _brightnessActiveRt;
+        _targetBrightness = clampBrightness(_brightnessActiveRt);
     }
     LOG_I("power", "Brilho ativo -> %d", _brightnessActiveRt);
 }

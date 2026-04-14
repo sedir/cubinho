@@ -73,6 +73,21 @@ static uint8_t  lastDimMinute   = 255;
 static int      currentRotation  = 1;
 static uint32_t lastImuMs        = 0;
 
+static void applyConfiguredTimezone() {
+    long totalMinutes = TIMEZONE_OFFSET_SEC / 60L;
+    char sign = (totalMinutes >= 0) ? '-' : '+';
+    unsigned long absMinutes = (unsigned long)labs(totalMinutes);
+    unsigned long hours = absMinutes / 60UL;
+    unsigned long minutes = absMinutes % 60UL;
+    char tz[20];
+
+    if (minutes == 0) snprintf(tz, sizeof(tz), "UTC%c%lu", sign, hours);
+    else              snprintf(tz, sizeof(tz), "UTC%c%lu:%02lu", sign, hours, minutes);
+
+    setenv("TZ", tz, 1);
+    tzset();
+}
+
 static void updateOrientation() {
     if (millis() - lastImuMs < 500) return;
     lastImuMs = millis();
@@ -267,11 +282,7 @@ void setup() {
     if (isColdBoot) {
         configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     } else {
-        int h = TIMEZONE_OFFSET_SEC / 3600;
-        char tz[16];
-        snprintf(tz, sizeof(tz), "UTC%+d", -h);
-        setenv("TZ", tz, 1);
-        tzset();
+        applyConfiguredTimezone();
     }
 
     initSprite();

@@ -7,6 +7,32 @@
 static Event _events[MAX_EVENTS];
 static int   _eventCount = 0;
 
+static bool eventToTimestamp(const Event& e, int year, time_t& outTs) {
+    struct tm candidate = {};
+    candidate.tm_year = year - 1900;
+    candidate.tm_mon  = e.month - 1;
+    candidate.tm_mday = e.day;
+    candidate.tm_hour = e.hour;
+    candidate.tm_min  = e.minute;
+    candidate.tm_sec  = 0;
+    candidate.tm_isdst = -1;
+
+    time_t ts = mktime(&candidate);
+    if (ts < 0) return false;
+
+    struct tm check = {};
+    if (!localtime_r(&ts, &check)) return false;
+    if (check.tm_mon  != candidate.tm_mon  ||
+        check.tm_mday != candidate.tm_mday ||
+        check.tm_hour != candidate.tm_hour ||
+        check.tm_min  != candidate.tm_min) {
+        return false;
+    }
+
+    outTs = ts;
+    return true;
+}
+
 static void eventsLoad() {
     _eventCount = 0;
     if (!SD.exists("/events.json")) return;
@@ -98,36 +124,26 @@ void eventsSave() {
 bool eventsGetNext(Event& out) {
     struct tm now;
     if (!getLocalTime(&now, 0)) return false;
-
-    int nowMonth = now.tm_mon + 1;
-    int nowDay   = now.tm_mday;
-    int nowHour  = now.tm_hour;
-    int nowMin   = now.tm_min;
-    int nowVal   = nowMonth * 100000 + nowDay * 1000 + nowHour * 60 + nowMin;
+    time_t nowTs = time(nullptr);
+    if (nowTs <= 0) return false;
 
     int bestIdx = -1;
-    int bestVal = 999999999;
+    time_t bestTs = 0;
+    int currentYear = now.tm_year + 1900;
 
     for (int i = 0; i < _eventCount; i++) {
         if (!_events[i].active) continue;
-        int val = _events[i].month * 100000 + _events[i].day * 1000 +
-                  _events[i].hour * 60 + _events[i].minute;
-        // Próximo evento futuro (ou hoje, ainda não passou)
-        if (val >= nowVal && val < bestVal) {
-            bestVal = val;
+        time_t candidateTs = 0;
+        if (!eventToTimestamp(_events[i], currentYear, candidateTs)) continue;
+        if (candidateTs < nowTs && !eventToTimestamp(_events[i], currentYear + 1, candidateTs)) {
+            continue;
+        }
+        if (bestIdx < 0 || candidateTs < bestTs) {
             bestIdx = i;
+            bestTs = candidateTs;
         }
     }
-    // Se nenhum futuro, pega o primeiro do próximo ciclo (wrap-around)
-    if (bestIdx < 0 && _eventCount > 0) {
-        bestVal = 999999999;
-        for (int i = 0; i < _eventCount; i++) {
-            if (!_events[i].active) continue;
-            int val = _events[i].month * 100000 + _events[i].day * 1000 +
-                      _events[i].hour * 60 + _events[i].minute;
-            if (val < bestVal) { bestVal = val; bestIdx = i; }
-        }
-    }
+
     if (bestIdx < 0) return false;
     out = _events[bestIdx];
     return true;

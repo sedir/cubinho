@@ -37,14 +37,9 @@ cd cidinha
 cp src/config.h.example src/config.h
 ```
 
-Abra [src/config.h](src/config.h) e preencha:
+Abra [src/config.h](src/config.h) e ajuste pelo menos as coordenadas GPS, o fuso horário e os defaults de brilho/energia se necessário.
 
-```cpp
-#define WIFI_SSID     "nome_da_sua_rede"
-#define WIFI_PASSWORD "sua_senha"
-```
-
-Ajuste também as coordenadas GPS e o fuso horário se não estiver em Komatsu, Ishikawa (Japão, UTC+9).
+As credenciais WiFi nao ficam mais no firmware: no primeiro boot, ou apos limpar as credenciais, o dispositivo abre o AP `Portela-Setup` para configuracao via portal cativo.
 
 ### 3. Compile e envie para o CoreS3
 
@@ -68,7 +63,7 @@ Ou use os botões da extensão PlatformIO no VS Code.
 ```
 src/
 ├── main.cpp               — loop principal, inicialização, LTR553, acelerômetro
-├── config.h               — suas credenciais (não commitado)
+├── config.h               — configuração local do dispositivo (não commitado)
 ├── config.h.example       — template de configuração
 ├── theme.h                — paleta de cores e constantes de layout
 ├── logger.h               — macros LOG_I/W/E (Serial + Telnet)

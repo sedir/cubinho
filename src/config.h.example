@@ -7,8 +7,9 @@
 // =============================================================================
 
 // WiFi
-#define WIFI_SSID     "seu_ssid_aqui"
-#define WIFI_PASSWORD "sua_senha_aqui"
+// As credenciais sao configuradas no portal cativo e salvas em NVS.
+// WIFI_KEEP_ALIVE define apenas o comportamento padrao apos conectar.
+#define WIFI_KEEP_ALIVE  false
 
 // Localização para OpenMeteo (ajuste para sua cidade)
 #define GEO_LATITUDE         36.3938
@@ -34,11 +35,14 @@
 // Gerenciamento de energia — brilho do display
 #define BRIGHTNESS_ACTIVE  150    // brilho normal (0–255)
 #define BRIGHTNESS_DIM      50    // brilho reduzido após inatividade (0–255)
+#define BRIGHTNESS_MIN_FLOOR 80   // piso absoluto para auto-brilho/fade
+#define BRIGHTNESS_FADE_STEP 2    // unidades por tick do fade
+#define BRIGHTNESS_FADE_INTERVAL_MS 20
 #define DIM_TIMEOUT_MS   30000    // ms sem toque → dim automático
 
 // Auto-brilho via sensor de luz LTR553 (sensor embutido)
 #define AUTO_BRIGHTNESS_ENABLED  true
-#define AUTO_BRIGHTNESS_MIN       30   // brilho mínimo auto (0–255)
+#define AUTO_BRIGHTNESS_MIN       BRIGHTNESS_MIN_FLOOR
 #define AUTO_BRIGHTNESS_MAX      200   // brilho máximo auto (0–255)
 
 // Deep sleep — ativa após este tempo sem toque (timer não pode estar ativo)
@@ -49,6 +53,10 @@
 
 // Sensor de proximidade LTR553 — threshold para acordar o display do dim
 #define LTR553_PROX_THRESH  80
+
+// Wake por acelerometro enquanto o display esta em dim
+#define ACCEL_WAKE_ENABLED   true
+#define ACCEL_WAKE_THRESHOLD 0.18f
 
 // OTA — atualização sem fio (ativo apenas quando WiFi mantido por Telnet)
 #define OTA_ENABLED  true
