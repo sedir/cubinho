@@ -121,7 +121,7 @@ void eventsSave() {
     f.close();
 }
 
-bool eventsGetNext(Event& out) {
+bool eventsGetNextOccurrence(Event& out, time_t& outTs) {
     struct tm now;
     if (!getLocalTime(&now, 0)) return false;
     time_t nowTs = time(nullptr);
@@ -146,5 +146,11 @@ bool eventsGetNext(Event& out) {
 
     if (bestIdx < 0) return false;
     out = _events[bestIdx];
+    outTs = bestTs;
     return true;
+}
+
+bool eventsGetNext(Event& out) {
+    time_t nextTs = 0;
+    return eventsGetNextOccurrence(out, nextTs);
 }

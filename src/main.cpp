@@ -17,6 +17,7 @@
 #include "telnet_log.h"
 #include "ota_manager.h"
 #include "events.h"
+#include "calendar_feed.h"
 #include "chime_wav.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
@@ -224,11 +225,45 @@ static void updateNextEvent() {
     if (millis() - lastEventCheck < 30000) return;
     lastEventCheck = millis();
 
+    char buf[48];
     Event next;
-    if (eventsGetNext(next)) {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "%02d/%02d %02d:%02d %s",
-                 next.day, next.month, next.hour, next.minute, next.name);
+    time_t nextTs = 0;
+    if (calendarBuildTodaySummary(buf, sizeof(buf))) {
+        screenHomeSetNextEvent(buf);
+    } else if (eventsGetNextOccurrence(next, nextTs)) {
+        struct tm nowInfo = {};
+        struct tm nextInfo = {};
+        time_t nowTs = time(nullptr);
+
+        if (nowTs > 0 &&
+            localtime_r(&nowTs, &nowInfo) != nullptr &&
+            localtime_r(&nextTs, &nextInfo) != nullptr) {
+            char whenBuf[20];
+            struct tm todayMidnight = nowInfo;
+            todayMidnight.tm_hour = 0;
+            todayMidnight.tm_min = 0;
+            todayMidnight.tm_sec = 0;
+            time_t todayTs = mktime(&todayMidnight);
+            int dayDiff = (todayTs > 0) ? (int)((nextTs - todayTs) / 86400) : -1;
+
+            if (dayDiff == 0) {
+                snprintf(whenBuf, sizeof(whenBuf), "Hoje %02d:%02d",
+                         nextInfo.tm_hour, nextInfo.tm_min);
+            } else if (dayDiff == 1) {
+                snprintf(whenBuf, sizeof(whenBuf), "Amanha %02d:%02d",
+                         nextInfo.tm_hour, nextInfo.tm_min);
+            } else if (dayDiff > 1 && dayDiff <= 7) {
+                snprintf(whenBuf, sizeof(whenBuf), "Em %d dias", dayDiff);
+            } else {
+                snprintf(whenBuf, sizeof(whenBuf), "%02d/%02d %02d:%02d",
+                         next.day, next.month, next.hour, next.minute);
+            }
+
+            snprintf(buf, sizeof(buf), "%s • %s", whenBuf, next.name);
+        } else {
+            snprintf(buf, sizeof(buf), "%02d/%02d %02d:%02d • %s",
+                     next.day, next.month, next.hour, next.minute, next.name);
+        }
         screenHomeSetNextEvent(buf);
     } else {
         screenHomeSetNextEvent("");
@@ -344,13 +379,24 @@ void setup() {
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
+    static bool lastPortalMode = false;
+    static bool lastCalendarConfigMode = false;
+
     M5.update();
     telnetLogUpdate();
     wifiPortalUpdate();   // item #23
     otaUpdate();          // item #21
 
+    bool portalMode = wifiIsPortalMode();
+    bool calendarConfigMode = wifiIsCalendarConfigMode();
+    if (portalMode != lastPortalMode || calendarConfigMode != lastCalendarConfigMode) {
+        needsRedraw = true;
+        lastPortalMode = portalMode;
+        lastCalendarConfigMode = calendarConfigMode;
+    }
+
     // ── Portal mode: tela de configuração WiFi ───────────────────────────────
-    if (wifiIsPortalMode()) {
+    if (portalMode) {
         static uint32_t lastPortalDraw = 0;
         if (millis() - lastPortalDraw > 2000) {
             lastPortalDraw = millis();
@@ -405,25 +451,40 @@ void loop() {
             }
         } else if (currentScreen == 3) {
             // Tela de configurações: scroll vertical, tap e long press
-            bool isVertSwipe = (abs(swipeDeltaY) >= 20 && abs(swipeDeltaY) > abs(swipeDeltaX));
-            if (isVertSwipe) {
+            if (wifiIsCalendarConfigMode()) {
+                wifiStopCalendarConfig();
+                needsRedraw = true;
+            } else {
+                bool isVertSwipe = (abs(swipeDeltaY) >= 20 && abs(swipeDeltaY) > abs(swipeDeltaX));
+                if (isVertSwipe) {
                 g_settingsScrollTarget = constrain(g_settingsScrollTarget - swipeDeltaY,
                                                    0, screenSettingsMaxScroll());
                 needsRedraw = true;
-            } else if (longPress) {
-                bool hadConfirm = screenSettingsIsConfirmOpen();
-                screenSettingsHandleLongPress(touchStartX, touchStartY, (int)g_settingsScrollAnim);
-                if (hadConfirm != screenSettingsIsConfirmOpen()) needsRedraw = true;
-                // Se chegou aqui, nenhum restart ocorreu (ação não executada)
-            } else {
-                bool hadConfirm = screenSettingsIsConfirmOpen();
-                if (screenSettingsHandleTap(touchStartX, touchStartY,
-                                             g_runtimeCfg, (int)g_settingsScrollAnim)) {
-                    runtimeConfigSave(g_runtimeCfg);
-                    runtimeConfigApply(g_runtimeCfg);
-                    needsRedraw = true;
+                } else if (longPress) {
+                    bool hadConfirm = screenSettingsIsConfirmOpen();
+                    bool hadCalendarConfig = wifiIsCalendarConfigMode();
+                    if (screenSettingsHandleLongPress(touchStartX, touchStartY, (int)g_settingsScrollAnim)) {
+                        needsRedraw = true;
+                    }
+                    if (hadConfirm != screenSettingsIsConfirmOpen() ||
+                        hadCalendarConfig != wifiIsCalendarConfigMode()) {
+                        needsRedraw = true;
+                    }
+                    // Se chegou aqui, nenhum restart ocorreu (ação não executada)
+                } else {
+                    bool hadConfirm = screenSettingsIsConfirmOpen();
+                    bool hadCalendarConfig = wifiIsCalendarConfigMode();
+                    if (screenSettingsHandleTap(touchStartX, touchStartY,
+                                                 g_runtimeCfg, (int)g_settingsScrollAnim)) {
+                        runtimeConfigSave(g_runtimeCfg);
+                        runtimeConfigApply(g_runtimeCfg);
+                        needsRedraw = true;
+                    }
+                    if (hadConfirm != screenSettingsIsConfirmOpen() ||
+                        hadCalendarConfig != wifiIsCalendarConfigMode()) {
+                        needsRedraw = true;
+                    }
                 }
-                if (hadConfirm != screenSettingsIsConfirmOpen()) needsRedraw = true;
             }
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)

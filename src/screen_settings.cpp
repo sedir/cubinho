@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "config.h"
 #include "status_ui.h"
+#include "calendar_feed.h"
 #include "wifi_manager.h"
 #include "runtime_config.h"
 #include "screen_home.h"
@@ -29,20 +30,21 @@ static const VEntry kEntries[] = {
     { EKIND_TOGGLE,   "WiFi permanente", "Mantem OTA e Telnet ativos"   },  // 1
     { EKIND_CYCLE,    "Intervalo clima", "Busca novos dados automaticamente" },  // 2
     { EKIND_ACTION,   "Alterar WiFi",    "Apaga credenciais e abre portal" },  // 3
-    { EKIND_CATEGORY, "Display",         nullptr                         },  // 4
-    { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal" },  // 5
-    { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho" },  // 6
-    { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"      },  // 7
-    { EKIND_CATEGORY, "Timers",          nullptr                         },  // 8
-    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial" },  // 9
-    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial" },  // 10
-    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial" },  // 11
-    { EKIND_CATEGORY, "Energia",         nullptr                         },  // 12
-    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"    },  // 13
-    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"        },  // 14
-    { EKIND_CATEGORY, "Sistema",         nullptr                         },  // 15
-    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"     },  // 16
-    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"    },  // 17
+    { EKIND_ACTION,   "Configurar iCal", "Abre pagina local temporaria"  },  // 4
+    { EKIND_CATEGORY, "Display",         nullptr                         },  // 5
+    { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal" },  // 6
+    { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho" },  // 7
+    { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"      },  // 8
+    { EKIND_CATEGORY, "Timers",          nullptr                         },  // 9
+    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial" },  // 10
+    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial" },  // 11
+    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial" },  // 12
+    { EKIND_CATEGORY, "Energia",         nullptr                         },  // 13
+    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"    },  // 14
+    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"        },  // 15
+    { EKIND_CATEGORY, "Sistema",         nullptr                         },  // 16
+    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"     },  // 17
+    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"    },  // 18
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -51,16 +53,17 @@ enum ItemIdx {
     IDX_KEEP_ALIVE    = 1,
     IDX_WEATHER_INT   = 2,
     IDX_WIFI_CHANGE   = 3,
-    IDX_BRIGHTNESS    = 5,
-    IDX_DIM_TIMEOUT   = 6,
-    IDX_AUTO_BRIGHT   = 7,
-    IDX_TIMER_LABEL_1 = 9,
-    IDX_TIMER_LABEL_2 = 10,
-    IDX_TIMER_LABEL_3 = 11,
-    IDX_DEEP_SLEEP    = 13,
-    IDX_ACCEL_WAKE    = 14,
-    IDX_RESTART       = 16,
-    IDX_FACTORY_RESET = 17,
+    IDX_CALENDAR_CFG  = 4,
+    IDX_BRIGHTNESS    = 6,
+    IDX_DIM_TIMEOUT   = 7,
+    IDX_AUTO_BRIGHT   = 8,
+    IDX_TIMER_LABEL_1 = 10,
+    IDX_TIMER_LABEL_2 = 11,
+    IDX_TIMER_LABEL_3 = 12,
+    IDX_DEEP_SLEEP    = 14,
+    IDX_ACCEL_WAKE    = 15,
+    IDX_RESTART       = 17,
+    IDX_FACTORY_RESET = 18,
 };
 
 // Opções de ciclo
@@ -195,10 +198,47 @@ static void drawEntry(lgfx::LovyanGFX& d, int entryIdx, int screenY,
 
     // Valor / badge à direita
     if (e.kind == EKIND_ACTION) {
-        // Indicador "pressione" — seta para a direita
-        d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-        d.setTextDatum(MR_DATUM);
-        d.drawString("segurar >", 312, screenY + 20);
+        if (entryIdx == IDX_CALENDAR_CFG) {
+            const char* status = calendarGetStatusLabel();
+            uint16_t badgeBg = 0x2945;
+            uint16_t badgeFg = COLOR_TEXT_PRIMARY;
+
+            switch (calendarGetStatus()) {
+                case CAL_STATUS_OK:
+                case CAL_STATUS_EMPTY:
+                    badgeBg = 0x0580;
+                    badgeFg = COLOR_TIMER_RUNNING;
+                    break;
+                case CAL_STATUS_ERROR:
+                    badgeBg = 0x8000;
+                    badgeFg = COLOR_TEXT_PRIMARY;
+                    break;
+                case CAL_STATUS_OFF:
+                    badgeBg = 0x4208;
+                    badgeFg = COLOR_TEXT_DIM;
+                    break;
+                default:
+                    break;
+            }
+
+            int bw = strlen(status) * 7 + 14;
+            int bx = 238 - bw;
+            int by = screenY + 11;
+
+            d.fillRoundRect(bx, by, bw, 18, 4, badgeBg);
+            d.setFont(&fonts::Font0);
+            d.setTextColor(badgeFg, badgeBg);
+            d.setTextDatum(MC_DATUM);
+            d.drawString(status, bx + bw / 2, by + 9);
+            d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+            d.setTextDatum(MR_DATUM);
+            d.drawString("segurar >", 312, screenY + 20);
+        } else {
+            // Indicador "pressione" — seta para a direita
+            d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+            d.setTextDatum(MR_DATUM);
+            d.drawString("segurar >", 312, screenY + 20);
+        }
     } else {
         // Toggle ou ciclo: badge com valor
         String val = valueLabel(entryIdx, cfg);
@@ -261,6 +301,11 @@ static void drawConfirmModal(lgfx::LovyanGFX& d) {
 
 // ── Draw principal ───────────────────────────────────────────────────────────
 void screenSettingsDraw(lgfx::LovyanGFX& d, const RuntimeConfig& cfg, int scrollOffset) {
+    if (wifiIsCalendarConfigMode()) {
+        drawCalendarConfigScreen(d);
+        return;
+    }
+
     d.fillScreen(COLOR_BACKGROUND);
 
     // ── Header ──
@@ -329,6 +374,11 @@ static int hitTestEntry(int tapY, int scrollOffset) {
 // ── Tap: cicla ou toggle ──────────────────────────────────────────────────────
 bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollOffset) {
     (void)tapX;
+    if (wifiIsCalendarConfigMode()) {
+        wifiStopCalendarConfig();
+        return false;
+    }
+
     if (g_confirmAction != CONFIRM_NONE) {
         const int w = 268, h = 120;
         const int x = (320 - w) / 2;
@@ -425,6 +475,10 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
 // ── Long press: ações ─────────────────────────────────────────────────────────
 bool screenSettingsHandleLongPress(int tapX, int tapY, int scrollOffset) {
     (void)tapX;
+    if (wifiIsCalendarConfigMode()) {
+        wifiStopCalendarConfig();
+        return true;
+    }
     if (g_confirmAction != CONFIRM_NONE) return false;
     int idx = hitTestEntry(tapY, scrollOffset);
     if (idx < 0) return false;
@@ -434,6 +488,8 @@ bool screenSettingsHandleLongPress(int tapX, int tapY, int scrollOffset) {
         case IDX_WIFI_CHANGE:
             g_confirmAction = CONFIRM_WIFI_CHANGE;
             break;
+        case IDX_CALENDAR_CFG:
+            return wifiStartCalendarConfig();
         case IDX_RESTART:
             g_confirmAction = CONFIRM_RESTART;
             break;
@@ -474,4 +530,33 @@ void drawWifiPortalScreen(lgfx::LovyanGFX& d) {
     d.setFont(&fonts::Font0);
     d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
     d.drawString("Apos salvar, reinicia automaticamente.", d.width() / 2, 210);
+}
+
+void drawCalendarConfigScreen(lgfx::LovyanGFX& d) {
+    char addr[40];
+    wifiGetCalendarConfigAddress(addr, sizeof(addr));
+    const char* statusText = calendarGetStatusText();
+
+    d.fillScreen(COLOR_BACKGROUND);
+
+    d.setFont(&fonts::FreeSansBold18pt7b);
+    d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
+    d.setTextDatum(MC_DATUM);
+    d.drawString("Configurar iCal", d.width() / 2, 44);
+
+    d.setFont(&fonts::FreeSans9pt7b);
+    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    d.drawString("No celular ou computador, acesse:", d.width() / 2, 88);
+
+    d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
+    d.drawString(addr[0] ? addr : "Conectando...", d.width() / 2, 116);
+
+    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    d.drawString(statusText, d.width() / 2, 146);
+    d.drawString("Cole a URL privada do feed iCal/ICS", d.width() / 2, 170);
+    d.drawString("e salve no navegador.", d.width() / 2, 190);
+
+    d.setFont(&fonts::Font0);
+    d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+    d.drawString("Toque para fechar esta tela.", d.width() / 2, 218);
 }

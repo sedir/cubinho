@@ -1,7 +1,9 @@
 #include "wifi_manager.h"
+#include "calendar_feed.h"
 #include "config.h"
 #include "logger.h"
 #include "ota_manager.h"
+#include "runtime_config.h"
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
@@ -21,13 +23,19 @@ static uint32_t     _updateIntervalMs   = WEATHER_UPDATE_INTERVAL_MS;
 
 // ── Portal cativo (item #23) ─────────────────────────────────────────────────
 static bool       _portalMode     = false;
+static bool       _calendarConfigMode = false;
 static DNSServer* _dnsServer      = nullptr;
 static WebServer* _webServer      = nullptr;
 static uint8_t    _failCount      = 0;
+static bool       _calendarStopPending = false;
+static uint32_t   _calendarStopAtMs    = 0;
+static char       _calendarConfigAddress[40] = "";
 
 static Preferences _prefs;
 static String _nvsSSID;
 static String _nvsPass;
+
+static void wifiOff();
 
 static void loadCredentials() {
     _prefs.begin("wifi", true);  // read-only
@@ -85,7 +93,58 @@ button:hover{background:#c81e45}
 </form></div></body></html>
 )rawliteral";
 
+static String buildCalendarConfigHtml() {
+    char currentUrl[192];
+    runtimeConfigGetCalendarUrl(currentUrl, sizeof(currentUrl));
+    const char* statusText = calendarGetStatusText();
+    const char* statusLabel = calendarGetStatusLabel();
+
+    String html;
+    html.reserve(1400);
+    html += F("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+    html += F("<title>Portela Calendar</title><style>");
+    html += F("body{font-family:sans-serif;background:#111827;color:#e5e7eb;display:flex;justify-content:center;padding:28px}");
+    html += F(".c{background:#1f2937;padding:28px;border-radius:16px;max-width:560px;width:100%;box-sizing:border-box}");
+    html += F("h1{color:#f59e0b;text-align:center;margin:0 0 10px}");
+    html += F("p{color:#9ca3af;line-height:1.4}label{display:block;margin:16px 0 6px}");
+    html += F("input{width:100%;padding:12px;border:1px solid #374151;border-radius:8px;background:#0f172a;color:#e5e7eb;box-sizing:border-box;font-size:14px}");
+    html += F("button{width:100%;padding:14px;margin-top:18px;background:#f59e0b;color:#111827;border:none;border-radius:8px;font-size:16px;font-weight:700}");
+    html += F(".tip{font-size:12px;color:#9ca3af;margin-top:14px}.status{margin:14px 0;padding:12px;border-radius:10px;background:#0f172a;border:1px solid #374151}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#374151;font-size:12px;font-weight:700;margin-right:8px}</style></head><body><div class=\"c\">");
+    html += F("<h1>Calendario iCal</h1><p>Cole aqui a URL privada do feed iCal/ICS. O campo abaixo mostra a URL atualmente salva no aparelho. Salvar vazio desativa a integracao.</p>");
+    html += F("<div class=\"status\"><span class=\"tag\">");
+    html += statusLabel;
+    html += F("</span>");
+    html += statusText;
+    html += F("</div>");
+    html += F("<form method=\"POST\" action=\"/save\"><label>URL do calendario</label><input name=\"url\" value=\"");
+    html += currentUrl;
+    html += F("\" placeholder=\"https://.../basic.ics\" autocomplete=\"off\">");
+    html += F("<button type=\"submit\">Salvar</button></form>");
+    html += F("<div class=\"tip\">A pagina fica ativa apenas enquanto este modo estiver aberto no dispositivo.</div>");
+    html += F("</div></body></html>");
+    return html;
+}
+
+static void stopWebUi() {
+    if (_dnsServer) {
+        _dnsServer->stop();
+        delete _dnsServer;
+        _dnsServer = nullptr;
+    }
+    if (_webServer) {
+        _webServer->stop();
+        delete _webServer;
+        _webServer = nullptr;
+    }
+    _portalMode = false;
+    _calendarConfigMode = false;
+    _calendarStopPending = false;
+    _calendarStopAtMs = 0;
+    _calendarConfigAddress[0] = '\0';
+}
+
 static void startPortal() {
+    stopWebUi();
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
     WiFi.softAP(WIFI_PORTAL_AP_NAME);
@@ -123,10 +182,89 @@ static void startPortal() {
           WIFI_PORTAL_AP_NAME, WiFi.softAPIP().toString().c_str());
 }
 
+static bool ensureStaConnectedForUi() {
+    if (WiFi.status() == WL_CONNECTED) return true;
+
+    loadCredentials();
+    if (_nvsSSID.length() == 0) return false;
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(getSSID(), getPass());
+    LOG_I("wifi", "Conectando para configuracao local em %s...", getSSID());
+
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+        delay(250);
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        LOG_W("wifi", "Falha ao conectar para configuracao local");
+        if (!_keepAlive) wifiOff();
+        return false;
+    }
+
+    LOG_I("wifi", "Config local em IP %s", WiFi.localIP().toString().c_str());
+    return true;
+}
+
+static void startCalendarConfigServer() {
+    stopWebUi();
+
+    _webServer = new WebServer(80);
+    _webServer->on("/", HTTP_GET, []() {
+        _webServer->send(200, "text/html", buildCalendarConfigHtml());
+    });
+    _webServer->on("/save", HTTP_POST, []() {
+        String url = _webServer->arg("url");
+        url.trim();
+        runtimeConfigSaveCalendarUrl(url.c_str());
+        bool fetchOk = false;
+        if (url.length() == 0) {
+            fetchOk = false;
+        } else {
+            fetchOk = calendarFetchToday();
+        }
+
+        String html;
+        html.reserve(640);
+        html += F("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style='font-family:sans-serif;background:#111827;color:#e5e7eb;padding:28px'>");
+        html += F("<div style='max-width:560px;margin:0 auto;background:#1f2937;padding:28px;border-radius:16px'>");
+        html += F("<h2 style='margin-top:0;color:#f59e0b'>Configuracao do calendario</h2>");
+        if (url.length() == 0) {
+            html += F("<p>Calendario desativado. Nenhuma URL ficou salva.</p>");
+        } else if (fetchOk) {
+            html += F("<p>URL salva e validada com sucesso.</p>");
+            html += F("<p style='color:#9ca3af'>");
+            html += calendarGetStatusText();
+            html += F("</p>");
+        } else {
+            html += F("<p>URL salva, mas a validacao falhou.</p>");
+            html += F("<p style='color:#9ca3af'>");
+            html += calendarGetStatusText();
+            html += F("</p>");
+        }
+        html += F("<p style='color:#9ca3af'>A tela do dispositivo sera fechada em instantes.</p></div></body></html>");
+        _webServer->send(200, "text/html", html);
+        _calendarStopPending = true;
+        _calendarStopAtMs = millis() + 1800;
+        LOG_I("wifi", "URL iCal atualizada");
+    });
+    _webServer->onNotFound([]() {
+        _webServer->sendHeader("Location", "/");
+        _webServer->send(302, "text/plain", "");
+    });
+    _webServer->begin();
+
+    snprintf(_calendarConfigAddress, sizeof(_calendarConfigAddress), "http://%s",
+             WiFi.localIP().toString().c_str());
+    _calendarConfigMode = true;
+    LOG_I("wifi", "Config iCal ativa em %s", _calendarConfigAddress);
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 static void wifiOff() {
-    if (_keepAlive) {
-        LOG_I("wifi", "WiFi mantido ativo (Telnet/OTA)");
+    if (_keepAlive || _calendarConfigMode) {
+        LOG_I("wifi", "WiFi mantido ativo");
         return;
     }
     WiFi.disconnect(true);
@@ -136,6 +274,9 @@ static void wifiOff() {
 
 static void finishAsync() {
     if (_asyncOut) weatherFetch(*_asyncOut);
+    if (calendarHasFeedConfigured() && !calendarFetchToday()) {
+        LOG_W("wifi", "Calendario indisponivel — mantendo ultimo dado valido");
+    }
     // Inicializa OTA quando WiFi está ativo com keep-alive (item #21)
     if (_keepAlive) otaInit();
     wifiOff();
@@ -186,7 +327,7 @@ static void pollAsync() {
 
 // ── API pública ──────────────────────────────────────────────────────────────
 void wifiCheckPortal() {
-    if (_portalMode) return;
+    if (_portalMode || _calendarConfigMode) return;
     if (_failCount >= WIFI_PORTAL_FAIL_THRESHOLD) {
         LOG_W("wifi", "%d falhas consecutivas — iniciando portal cativo", _failCount);
         startPortal();
@@ -194,7 +335,7 @@ void wifiCheckPortal() {
 }
 
 void wifiBeginAsync(WeatherData& out) {
-    if (_state != ASYNC_IDLE || _portalMode) return;
+    if (_state != ASYNC_IDLE || _portalMode || _calendarConfigMode) return;
     _asyncOut     = &out;
     _asyncStartMs = millis();
 
@@ -213,7 +354,7 @@ void wifiBeginAsync(WeatherData& out) {
 }
 
 bool wifiConnectAndFetch(WeatherData& out) {
-    if (_portalMode) return false;
+    if (_portalMode || _calendarConfigMode) return false;
     loadCredentials();
 
     WiFi.mode(WIFI_STA);
@@ -247,6 +388,9 @@ bool wifiConnectAndFetch(WeatherData& out) {
     if (!weatherOk) {
         LOG_W("wifi", "Clima indisponivel — mantendo ultimo dado valido");
     }
+    if (calendarHasFeedConfigured() && !calendarFetchToday()) {
+        LOG_W("wifi", "Calendario indisponivel — mantendo ultimo dado valido");
+    }
     wifiOff();
     _firstFetch  = false;
     _lastFetchMs = millis();
@@ -268,7 +412,7 @@ void wifiInit(WeatherData& weatherData) {
 }
 
 void wifiScheduleUpdate(WeatherData& weatherData) {
-    if (_portalMode) return;
+    if (_portalMode || _calendarConfigMode) return;
     if (_state != ASYNC_IDLE) {
         _asyncOut = &weatherData;
         pollAsync();
@@ -282,18 +426,23 @@ void wifiScheduleUpdate(WeatherData& weatherData) {
 }
 
 void wifiForceRefresh(WeatherData& weatherData) {
-    if (_state != ASYNC_IDLE) return;  // já buscando
+    if (_state != ASYNC_IDLE || _calendarConfigMode) return;  // já buscando
     LOG_I("wifi", "Atualizacao forcada pelo usuario");
     wifiBeginAsync(weatherData);
 }
 
 bool wifiIsFetching() { return _state != ASYNC_IDLE; }
 bool wifiIsPortalMode() { return _portalMode; }
+bool wifiIsCalendarConfigMode() { return _calendarConfigMode; }
 
 void wifiPortalUpdate() {
-    if (!_portalMode) return;
-    if (_dnsServer) _dnsServer->processNextRequest();
-    if (_webServer) _webServer->handleClient();
+    if (_portalMode && _dnsServer) _dnsServer->processNextRequest();
+    if ((_portalMode || _calendarConfigMode) && _webServer) _webServer->handleClient();
+    if (_calendarConfigMode && _calendarStopPending && millis() >= _calendarStopAtMs) {
+        stopWebUi();
+        if (!_keepAlive) wifiOff();
+        LOG_I("wifi", "Config iCal encerrada");
+    }
 }
 
 void wifiSetKeepAlive(bool keep) {
@@ -314,4 +463,27 @@ int wifiGetRSSI() {
 void wifiSetUpdateInterval(uint32_t ms) {
     _updateIntervalMs = (ms > 0) ? ms : WEATHER_UPDATE_INTERVAL_MS;
     LOG_I("wifi", "Intervalo de atualizacao -> %lu ms", (unsigned long)_updateIntervalMs);
+}
+
+bool wifiStartCalendarConfig() {
+    if (_portalMode || _calendarConfigMode) return false;
+    if (_state != ASYNC_IDLE) {
+        LOG_W("wifi", "Config iCal bloqueada durante atualizacao");
+        return false;
+    }
+    if (!ensureStaConnectedForUi()) return false;
+    startCalendarConfigServer();
+    return true;
+}
+
+void wifiStopCalendarConfig() {
+    if (!_calendarConfigMode) return;
+    stopWebUi();
+    if (!_keepAlive) wifiOff();
+    LOG_I("wifi", "Config iCal encerrada manualmente");
+}
+
+void wifiGetCalendarConfigAddress(char* out, size_t outSize) {
+    if (!out || outSize == 0) return;
+    strlcpy(out, _calendarConfigAddress, outSize);
 }

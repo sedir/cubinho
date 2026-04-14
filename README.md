@@ -39,6 +39,12 @@ cp src/config.h.example src/config.h
 
 Abra [src/config.h](src/config.h) e ajuste pelo menos as coordenadas GPS, o fuso horário e os defaults de brilho/energia se necessário.
 
+Se quiser exibir eventos do seu calendario na home, voce pode:
+- definir `CALENDAR_ICS_URL` no `config.h` como valor inicial, ou
+- abrir `Configuracoes` -> `Configurar iCal` no aparelho e preencher a URL pelo navegador usando o IP mostrado na tela.
+
+O servidor local do calendario fica ativo apenas enquanto esse modo estiver aberto. O firmware busca os eventos do dia durante a atualizacao de rede e prioriza esse resumo na tela inicial.
+
 As credenciais WiFi nao ficam mais no firmware: no primeiro boot, ou apos limpar as credenciais, o dispositivo abre o AP `Portela-Setup` para configuracao via portal cativo.
 
 ### 3. Compile e envie para o CoreS3
@@ -81,6 +87,7 @@ src/
 ├── telnet_log.h/.cpp      — log via Telnet porta 23 + SD card
 ├── ota_manager.h/.cpp     — atualização OTA sem fio (ArduinoOTA)
 ├── events.h/.cpp          — agenda de eventos do SD card (/events.json)
+├── calendar_feed.h/.cpp   — leitor de feed iCal/ICS para eventos do dia
 └── chime_wav.h            — audio WAV do alarme (array PROGMEM)
 ```
 

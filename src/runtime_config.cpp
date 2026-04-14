@@ -5,7 +5,12 @@
 #include "screen_home.h"
 #include <Preferences.h>
 
+#ifndef CALENDAR_ICS_URL
+#define CALENDAR_ICS_URL ""
+#endif
+
 static Preferences _prefs;
+static char _calendarUrl[192] = CALENDAR_ICS_URL;
 
 void runtimeConfigLoad(RuntimeConfig& cfg) {
     _prefs.begin("cfg", true);  // read-only
@@ -21,6 +26,8 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
         snprintf(key, sizeof(key), "tLabel%d", i);
         cfg.timerLabelPreset[i] = _prefs.getInt(key, i);
     }
+    String calUrl = _prefs.getString("calUrl", CALENDAR_ICS_URL);
+    strlcpy(_calendarUrl, calUrl.c_str(), sizeof(_calendarUrl));
     _prefs.end();
 }
 
@@ -61,5 +68,23 @@ void runtimeConfigApply(const RuntimeConfig& cfg) {
 void runtimeConfigClear() {
     _prefs.begin("cfg", false);
     _prefs.clear();
+    _prefs.end();
+    strlcpy(_calendarUrl, CALENDAR_ICS_URL, sizeof(_calendarUrl));
+}
+
+bool runtimeConfigHasCalendarUrl() {
+    return _calendarUrl[0] != '\0';
+}
+
+void runtimeConfigGetCalendarUrl(char* out, size_t outSize) {
+    if (!out || outSize == 0) return;
+    strlcpy(out, _calendarUrl, outSize);
+}
+
+void runtimeConfigSaveCalendarUrl(const char* url) {
+    const char* safeUrl = url ? url : "";
+    strlcpy(_calendarUrl, safeUrl, sizeof(_calendarUrl));
+    _prefs.begin("cfg", false);
+    _prefs.putString("calUrl", _calendarUrl);
     _prefs.end();
 }

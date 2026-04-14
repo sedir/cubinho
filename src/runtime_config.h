@@ -24,3 +24,8 @@ void runtimeConfigApply(const RuntimeConfig& cfg);
 
 // Apaga o namespace NVS "cfg" (factory reset).
 void runtimeConfigClear();
+
+// URL do feed iCal/ICS armazenada em NVS.
+bool runtimeConfigHasCalendarUrl();
+void runtimeConfigGetCalendarUrl(char* out, size_t outSize);
+void runtimeConfigSaveCalendarUrl(const char* url);

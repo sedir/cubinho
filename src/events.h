@@ -31,5 +31,8 @@ bool eventsRemove(int index);
 // Preenche 'out' com o evento e retorna true.
 bool eventsGetNext(Event& out);
 
+// Retorna o próximo evento e o timestamp local da próxima ocorrência.
+bool eventsGetNextOccurrence(Event& out, time_t& outTs);
+
 // Salva eventos no SD card.
 void eventsSave();

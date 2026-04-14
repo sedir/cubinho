@@ -15,6 +15,10 @@ void wifiSetUpdateInterval(uint32_t ms);          // altera intervalo de atualiz
 bool wifiIsPortalMode();     // true se em modo AP de configuração
 void wifiPortalUpdate();     // poll DNS + HTTP do portal — chamar no loop
 void wifiCheckPortal();      // verifica se deve entrar em portal mode
+bool wifiStartCalendarConfig();
+void wifiStopCalendarConfig();
+bool wifiIsCalendarConfigMode();
+void wifiGetCalendarConfigAddress(char* out, size_t outSize);
 
 // Credenciais armazenadas em NVS (item #23)
 bool wifiHasStoredCredentials();

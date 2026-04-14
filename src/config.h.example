@@ -19,6 +19,13 @@
 // Nome da cidade exibido na tela de clima
 #define CITY_NAME "Komatsu, Ishikawa"
 
+// Calendario pessoal (opcional)
+// Use como fallback/default para o feed iCal/ICS.
+// Tambem pode ser configurado depois pela tela "Configurar iCal".
+// Ex.: Google/Apple/Outlook com feed "secret/private".
+// Deixe vazio para desativar.
+#define CALENDAR_ICS_URL ""
+
 // NTP — servidores de tempo
 #define NTP_SERVER_1 "ntp.nict.jp"
 #define NTP_SERVER_2 "pool.ntp.org"

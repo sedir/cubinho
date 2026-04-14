@@ -231,6 +231,21 @@ static void appendEllipsisToSummary(lgfx::LovyanGFX& d, char* text, size_t size,
     }
 }
 
+static void appendEllipsisToHeader(lgfx::LovyanGFX& d, char* text, size_t size, int maxWidth) {
+    trimSummary(text);
+    while (text[0] && d.textWidth(text) + d.textWidth("...") > maxWidth) {
+        size_t len = strlen(text);
+        if (len == 0) break;
+        text[len - 1] = '\0';
+        trimSummary(text);
+    }
+
+    if (text[0]) {
+        size_t len = strlen(text);
+        snprintf(text + len, size - len, "...");
+    }
+}
+
 static bool drawOtherTimersSummary(lgfx::LovyanGFX& d, int focused, int y) {
     char summary[64] = "";
     const int maxWidth = d.width() - 24;
@@ -321,10 +336,13 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
 
     // Evento próximo (item #24)
     if (nextEventText[0]) {
+        char headerEvent[48];
+        strlcpy(headerEvent, nextEventText, sizeof(headerEvent));
         display.setFont(&fonts::Font0);
         display.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
         display.setTextDatum(TL_DATUM);
-        display.drawString(nextEventText, 6, 25);
+        appendEllipsisToHeader(display, headerEvent, sizeof(headerEvent), display.width() - 12);
+        display.drawString(headerEvent, 6, 25);
     }
 
     // --- Hora grande (Y fixo — não desloca por nextEventText) ---
