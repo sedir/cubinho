@@ -170,6 +170,15 @@ static int drawTempC(lgfx::LovyanGFX &d, const char *prefix, float val, int deci
     return x2 + 7 + d.textWidth("C");
 }
 
+static uint16_t uvColor(float uv)
+{
+    if (uv < 3.0f)  return COLOR_TEMP_COMFORT;  // baixo
+    if (uv < 6.0f)  return COLOR_BOLT;           // moderado
+    if (uv < 8.0f)  return 0xFD20;              // alto
+    if (uv < 11.0f) return TFT_RED;             // muito alto
+    return 0xF81F;                               // extremo
+}
+
 static bool isRainCode(int code)
 {
     return (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
@@ -337,53 +346,134 @@ static void drawWrappedCenteredText(lgfx::LovyanGFX &d, const char *text, int ce
     }
 }
 
-// ── Barras horárias + mini ícones ────────────────────────────────────────────
-static void drawHourlyForecast(lgfx::LovyanGFX &d, const WeatherData &data)
+// ── Gráfico horário: sparkline + banda de conforto + precipitação ────────────
+static void drawHourlyChart(lgfx::LovyanGFX &d, const WeatherData &data)
 {
-    const int N = min(data.hourlyCount, 6);
-    if (N < 1)
+    const int N = min(data.hourlyCount, 48);
+    if (N < 2)
         return;
 
-    const int BAR_W = 36, GAP = 6, BAR_MAX = 50, BAR_MIN = 8;
-    const int BASE_Y = 213;
-    const int START_X = (d.width() - (N * BAR_W + (N - 1) * GAP)) / 2;
+    // Geometria do gráfico
+    const int CX    = 10;                  // margem esquerda
+    const int CW    = d.width() - 20;      // 300px
+    const int CT    = 132;                 // topo da área de temperatura
+    const int CB    = 196;                 // base da área de temperatura
+    const int CH    = CB - CT;             // 64px de altura
+    const int PR_Y  = 198;                 // topo das barras de precipitação
+    const int PR_H  = 10;                  // altura máxima das barras
+    const int LBL_Y = 211;                 // y das labels de hora
 
+    // ── Faixa de temperatura (sempre inclui a zona de conforto) ─────────────
     float tmin = data.hourlyTemp[0], tmax = data.hourlyTemp[0];
-    for (int i = 1; i < N; i++)
-    {
-        if (data.hourlyTemp[i] < tmin)
-            tmin = data.hourlyTemp[i];
-        if (data.hourlyTemp[i] > tmax)
-            tmax = data.hourlyTemp[i];
+    for (int i = 1; i < N; i++) {
+        if (data.hourlyTemp[i] < tmin) tmin = data.hourlyTemp[i];
+        if (data.hourlyTemp[i] > tmax) tmax = data.hourlyTemp[i];
     }
-    float range = (tmax - tmin < 4.0f) ? 4.0f : (tmax - tmin);
+    tmin = min(tmin, (float)COMFORT_TEMP_MIN - 2.0f);
+    tmax = max(tmax, (float)COMFORT_TEMP_MAX + 2.0f);
+    float trange = tmax - tmin;
 
-    for (int i = 0; i < N; i++)
+    auto tempToY = [&](float t) -> int {
+        return CB - (int)((t - tmin) / trange * CH + 0.5f);
+    };
+
+    // ── Preenchimento sutil da banda de conforto ─────────────────────────────
+    int yBandHi = max(CT, tempToY(COMFORT_TEMP_MAX));
+    int yBandLo = min(CB, tempToY(COMFORT_TEMP_MIN));
+    if (yBandLo > yBandHi)
+        d.fillRect(CX, yBandHi, CW, yBandLo - yBandHi, 0x0841); // verde muito escuro
+
+    // ── Linhas pontilhadas nos limites da zona de conforto ───────────────────
+    int yCH = tempToY(COMFORT_TEMP_MAX);
+    int yCL = tempToY(COMFORT_TEMP_MIN);
+    for (int x = CX; x < CX + CW; x += 4) {
+        if (yCH >= CT && yCH <= CB) d.drawPixel(x, yCH, COLOR_TEMP_COMFORT);
+        if (yCL >= CT && yCL <= CB) d.drawPixel(x, yCL, COLOR_TEMP_COMFORT);
+    }
+
+    // ── Sparkline 2px, colorida por zona de conforto ─────────────────────────
+    for (int i = 1; i < N; i++) {
+        int x1 = CX + (i - 1) * CW / (N - 1);
+        int x2 = CX + i       * CW / (N - 1);
+        int y1 = tempToY(data.hourlyTemp[i - 1]);
+        int y2 = tempToY(data.hourlyTemp[i]);
+        uint16_t col = tempColor(data.hourlyTemp[i]);
+        d.drawLine(x1, y1,     x2, y2,     col);
+        d.drawLine(x1, y1 + 1, x2, y2 + 1, col);
+    }
+
+    // Marcador da hora atual (primeiro ponto)
+    d.fillCircle(CX, tempToY(data.hourlyTemp[0]), 2, TFT_WHITE);
+
+    // ── Labels de temperatura em extremos significativos ─────────────────────
+    // Estratégia: extremos locais (pico/vale) filtrados por espaçamento mínimo
+    // (MIN_GAP px) e variação mínima (LABEL_THRESH °C) desde o último label.
     {
-        int x = START_X + i * (BAR_W + GAP);
-        int cx = x + BAR_W / 2;
-        int barH = BAR_MIN + (int)((data.hourlyTemp[i] - tmin) / range * (BAR_MAX - BAR_MIN));
-        int barY = BASE_Y - barH;
+        const float LABEL_THRESH = 2.0f;   // °C mínimo de variação
+        const int   MIN_GAP      = 40;     // px mínimo entre labels
 
-        d.fillRect(x, barY, BAR_W, barH, tempColor(data.hourlyTemp[i]));
+        int   kept[48];
+        int   nkept   = 0;
+        int   lastX   = CX;
+        float lastT   = data.hourlyTemp[0];
 
-        // Mini ícone climático acima da barra (item #20)
-        drawMiniWeatherIcon(d, data.hourlyCode[i], cx, barY - 10);
+        kept[nkept++] = 0; // primeiro ponto sempre
 
-        // Temperatura acima do ícone
-        char tbuf[6];
-        snprintf(tbuf, sizeof(tbuf), "%.0f", data.hourlyTemp[i]);
+        for (int i = 1; i < N - 1; i++) {
+            float prev = data.hourlyTemp[i - 1];
+            float cur  = data.hourlyTemp[i];
+            float next = data.hourlyTemp[i + 1];
+            if (!(cur > prev && cur > next) && !(cur < prev && cur < next)) continue;
+
+            int x = CX + i * CW / (N - 1);
+            if (x - lastX >= MIN_GAP && fabsf(cur - lastT) >= LABEL_THRESH) {
+                kept[nkept++] = i;
+                lastX = x;
+                lastT = cur;
+            }
+        }
+
         d.setFont(&fonts::Font0);
-        d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-        d.setTextDatum(BC_DATUM);
-        d.drawString(tbuf, cx, barY - 18);
+        for (int k = 0; k < nkept; k++) {
+            int   i   = kept[k];
+            int   px  = CX + i * CW / (N - 1);
+            int   py  = tempToY(data.hourlyTemp[i]);
+            char  tbuf[5];
+            snprintf(tbuf, sizeof(tbuf), "%.0f", data.hourlyTemp[i]);
+            d.setTextColor(tempColor(data.hourlyTemp[i]), COLOR_BACKGROUND);
+            // Acima do ponto se houver espaço, senão abaixo
+            if (py - 4 >= CT + 8) {
+                d.setTextDatum(BC_DATUM);
+                d.drawString(tbuf, px, py - 4);
+            } else {
+                d.setTextDatum(TC_DATUM);
+                d.drawString(tbuf, px, py + 3);
+            }
+        }
+    }
 
-        // Hora abaixo da barra
-        char hbuf[5];
-        snprintf(hbuf, sizeof(hbuf), "%dh", (data.hourlyStartHour + i) % 24);
-        d.setTextDatum(TC_DATUM);
-        d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-        d.drawString(hbuf, cx, BASE_Y + 2);
+    // ── Barras de probabilidade de precipitação ──────────────────────────────
+    for (int i = 0; i < N; i++) {
+        int prob = data.hourlyPrecipProb[i];
+        if (prob < 10) continue;
+        int x  = CX + i * CW / (N - 1);
+        int bh = max(1, prob * PR_H / 100);
+        uint16_t col = (prob >= 70) ? COLOR_RAIN
+                     : (prob >= 40) ? COLOR_HUMIDITY
+                     :                COLOR_TEXT_SUBTLE;
+        d.fillRect(x, PR_Y + PR_H - bh, 2, bh, col);
+    }
+
+    // ── Labels de hora a cada 6h ─────────────────────────────────────────────
+    d.setFont(&fonts::Font0);
+    d.setTextDatum(TC_DATUM);
+    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    for (int i = 0; i < N; i += 6) {
+        int x = CX + i * CW / (N - 1);
+        int h = (data.hourlyStartHour + i) % 24;
+        char buf[5];
+        snprintf(buf, sizeof(buf), "%dh", h);
+        d.drawString(buf, x, LBL_Y);
     }
 }
 
@@ -435,7 +525,7 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
     const int RIGHT_X = 158;
     char buf[48];
 
-    int afterTemp = drawTempC(display, "Atual: ", data.tempCurrent, 1, RIGHT_X, 26,
+    int afterTemp = drawTempC(display, "Atual: ", data.tempCurrent, 1, RIGHT_X, 24,
                               tempColor(data.tempCurrent));
 
     if (!isnan(data.tempPrevious))
@@ -448,24 +538,35 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
             display.setFont(&fonts::Font0);
             display.setTextColor(col, COLOR_BACKGROUND);
             display.setTextDatum(TL_DATUM);
-            display.drawString(buf, afterTemp + 4, 30);
+            display.drawString(buf, afterTemp + 4, 28);
             display.setFont(&fonts::FreeSans9pt7b);
         }
     }
 
-    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, RIGHT_X, 47, COLOR_TEXT_PRIMARY);
-    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 47, COLOR_TEXT_PRIMARY);
+    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, RIGHT_X, 44, COLOR_TEXT_PRIMARY);
+    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 44, COLOR_TEXT_PRIMARY);
 
     display.setFont(&fonts::FreeSans9pt7b);
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
     display.setTextColor(COLOR_HUMIDITY, COLOR_BACKGROUND);
     display.setTextDatum(TL_DATUM);
-    display.drawString(buf, RIGHT_X, 69);
+    display.drawString(buf, RIGHT_X, 64);
 
     if (!isnan(data.apparentTemp))
     {
-        drawTempC(display, "Sensacao: ", data.apparentTemp, 0, RIGHT_X, 91,
+        drawTempC(display, "Sensacao: ", data.apparentTemp, 0, RIGHT_X, 81,
                   tempColor(data.apparentTemp));
+    }
+
+    if (!isnan(data.uvIndexMax) && data.uvIndexMax >= 0.0f)
+    {
+        char uvbuf[16];
+        snprintf(uvbuf, sizeof(uvbuf), "UV max: %.0f", data.uvIndexMax);
+        display.setFont(&fonts::Font0);
+        display.setTextColor(uvColor(data.uvIndexMax), COLOR_BACKGROUND);
+        display.setTextDatum(TL_DATUM);
+        display.drawString(uvbuf, RIGHT_X, 99);
+        display.setFont(&fonts::FreeSans9pt7b);
     }
 
     // Divisor horizontal
@@ -479,8 +580,8 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
     display.setTextDatum(MC_DATUM);
     display.drawString(rainSummary, display.width() / 2, 122);
 
-    // Previsão horária com mini ícones (items #5, #20)
-    drawHourlyForecast(display, data);
+    // Gráfico horário: sparkline + banda de conforto + precipitação
+    drawHourlyChart(display, data);
 
     // Timestamp no mesmo nível dos dots (sem sobreposição no eixo X)
     display.setFont(&fonts::Font0);

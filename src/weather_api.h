@@ -20,6 +20,7 @@ struct WeatherData {
     uint8_t hourlyPrecipProb[48];
     int   hourlyStartHour;
     int   hourlyCount;      // quantas horas válidas (até 48)
+    float uvIndexMax;   // UV index máximo do dia (NaN = sem dado)
     bool  valid;
 
     // Histórico de temperatura para sparkline (#17)

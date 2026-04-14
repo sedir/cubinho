@@ -34,7 +34,7 @@ bool weatherFetch(WeatherData& out) {
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
         "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,windspeed_10m"
-        "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+        "&daily=temperature_2m_max,temperature_2m_min,weather_code,uv_index_max"
         "&hourly=temperature_2m,weather_code,precipitation_probability"
         "&timezone=auto&forecast_days=2",
         GEO_LATITUDE, GEO_LONGITUDE);
@@ -67,6 +67,7 @@ bool weatherFetch(WeatherData& out) {
     filter["current"]["weather_code"] = true;
     filter["daily"]["temperature_2m_max"][0] = true;
     filter["daily"]["temperature_2m_min"][0] = true;
+    filter["daily"]["uv_index_max"][0] = true;
     filter["hourly"]["temperature_2m"] = true;
     filter["hourly"]["weather_code"] = true;
     filter["hourly"]["precipitation_probability"] = true;
@@ -97,6 +98,9 @@ bool weatherFetch(WeatherData& out) {
     out.weatherCode  = doc["current"]["weather_code"].as<int>();
     out.tempMax      = doc["daily"]["temperature_2m_max"][0].as<float>();
     out.tempMin      = doc["daily"]["temperature_2m_min"][0].as<float>();
+    out.uvIndexMax   = doc["daily"]["uv_index_max"][0].isNull()
+                           ? NAN
+                           : doc["daily"]["uv_index_max"][0].as<float>();
     out.valid        = true;
 
     strncpy(out.description, wmoToDescription(out.weatherCode), sizeof(out.description) - 1);
