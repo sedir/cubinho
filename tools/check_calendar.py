@@ -134,6 +134,16 @@ def parse_date_key(value: str) -> int:
         return 0
 
 
+def parse_tz_offset(value: str) -> int:
+    """Parse iCal timezone offset: +HHMM or -HHMM → seconds."""
+    if len(value) < 5:
+        return 0
+    sign = -1 if value[0] == '-' else 1
+    hours = int(value[1:3])
+    mins = int(value[3:5])
+    return sign * (hours * 3600 + mins * 60)
+
+
 # ---------------------------------------------------------------------------
 # Unfold de linhas iCal (RFC 5545 §3.1)
 # ---------------------------------------------------------------------------
@@ -177,7 +187,11 @@ def overlaps_today(start_dt, end_dt, all_day, today_start, tomorrow_start,
     if not overlap_ts and start_key > 0 and today_key > 0:
         eff_end_key = end_key if end_key > 0 else start_key
         if all_day:
-            overlap_ts = (start_key <= today_key) and (eff_end_key > today_key)
+            if end_key <= 0:
+                # Sem DTEND — evento de dia único (RFC 5545 §3.6.1)
+                overlap_ts = (start_key == today_key)
+            else:
+                overlap_ts = (start_key <= today_key) and (eff_end_key > today_key)
         else:
             overlap_ts = (start_key == today_key or
                           eff_end_key == today_key or
@@ -242,6 +256,14 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
     events_total = 0
     vevent_count = 0
 
+    # VTIMEZONE map: tzid → offset_seconds
+    vtimezones: dict[str, int] = {}
+    in_timezone = False
+    in_tz_standard = False
+    tz_id = ""
+    tz_std_offset = 0
+    has_tz_std = False
+
     in_event = False
     title = ""
     start_dt = None
@@ -269,9 +291,13 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
             if has_end:
                 print(f"    DTEND   raw={end_raw!r} params={end_params!r}")
                 print(f"            → {end_dt}")
-            if tzid_start and str(device_tz) != tzid_start:
-                print(f"    ⚠ TZID={tzid_start!r} != fuso do dispositivo {device_tz}"
-                      f" — firmware ignorará TZID e usará horário local do dispositivo")
+            if tzid_start and tzid_start in vtimezones:
+                tz_off = vtimezones[tzid_start]
+                eff = timezone(timedelta(seconds=tz_off))
+                print(f"    ✓ TZID={tzid_start!r} → offset={tz_off}s (via VTIMEZONE)")
+            elif tzid_start:
+                print(f"    ⚠ TZID={tzid_start!r} não encontrado em VTIMEZONE"
+                      f" — usando fuso do dispositivo {device_tz}")
 
         ok, end_adj = overlaps_today(
             start_dt, end_dt, all_day,
@@ -304,7 +330,34 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
             continue
         key, params, value = parsed
 
-        if line == "BEGIN:VEVENT":
+        if line == "BEGIN:VTIMEZONE":
+            in_timezone = True
+            tz_id = ""
+            tz_std_offset = 0
+            has_tz_std = False
+            in_tz_standard = False
+
+        elif line == "END:VTIMEZONE":
+            if tz_id and has_tz_std:
+                vtimezones[tz_id] = tz_std_offset
+                if verbose:
+                    print(f"  VTIMEZONE: {tz_id!r} → offset={tz_std_offset}s "
+                          f"(UTC{tz_std_offset//3600:+d})")
+            in_timezone = False
+            in_tz_standard = False
+
+        elif in_timezone:
+            if line == "BEGIN:STANDARD":
+                in_tz_standard = True
+            elif line == "END:STANDARD":
+                in_tz_standard = False
+            elif key == "TZID":
+                tz_id = value
+            elif in_tz_standard and key == "TZOFFSETTO":
+                tz_std_offset = parse_tz_offset(value)
+                has_tz_std = True
+
+        elif line == "BEGIN:VEVENT":
             in_event = True
             vevent_count += 1
             title = ""
@@ -332,7 +385,11 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
             m = re.search(r"TZID=([^;:]+)", params)
             tzid_start = m.group(1) if m else None
             start_key = parse_date_key(value)
-            result = parse_date_value(value, device_tz)
+            # Use VTIMEZONE offset if available, otherwise device_tz
+            eff_tz = device_tz
+            if tzid_start and tzid_start in vtimezones:
+                eff_tz = timezone(timedelta(seconds=vtimezones[tzid_start]))
+            result = parse_date_value(value, eff_tz)
             if result:
                 start_dt, all_day, _, _ = result
                 # VALUE=DATE em params → forçar all_day
@@ -349,7 +406,11 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
             m = re.search(r"TZID=([^;:]+)", params)
             tzid_end = m.group(1) if m else None
             end_key = parse_date_key(value)
-            result = parse_date_value(value, device_tz)
+            # Use VTIMEZONE offset if available, otherwise device_tz
+            eff_tz = device_tz
+            if tzid_end and tzid_end in vtimezones:
+                eff_tz = timezone(timedelta(seconds=vtimezones[tzid_end]))
+            result = parse_date_value(value, eff_tz)
             if result:
                 end_dt, _, _, _ = result
                 has_end = True

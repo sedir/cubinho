@@ -70,7 +70,7 @@ enum ItemIdx {
 static const int kWeatherOpts[]  = { 15, 30, 60, 120 };  // minutos
 static const int kBrightOpts[]   = { 80, 100, 150, 200, 255 };
 static const int kDimOpts[]      = { 15, 30, 60, 120, 300 };  // segundos
-static const int kSleepOpts[]    = { 5, 10, 30, 60, 0 };      // minutos (0=Nunca)
+static const int kSleepOpts[]    = { 2, 5, 10, 30, 60, 0 };      // minutos (0=Nunca)
 static const int kWeatherCnt  = 4;
 static const int kBrightCnt   = 5;
 static const int kDimCnt      = 5;

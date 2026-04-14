@@ -1,11 +1,16 @@
 #pragma once
 #include "weather_api.h"
 
+// Callback para reportar progresso durante wifiInit (splash screen)
+typedef void (*WifiProgressCb)(const char* message);
+void wifiSetProgressCallback(WifiProgressCb cb);
+
 void wifiInit(WeatherData& weatherData);
 void wifiScheduleUpdate(WeatherData& weatherData);
 void wifiBeginAsync(WeatherData& out);
 bool wifiConnectAndFetch(WeatherData& out);
 bool wifiIsFetching();
+bool wifiBgJustCompleted();   // true uma vez após fetch de background concluir
 void wifiSetKeepAlive(bool keep);
 int  wifiGetRSSI();
 void wifiForceRefresh(WeatherData& weatherData);  // dispara atualização imediata

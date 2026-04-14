@@ -31,6 +31,9 @@ bool screenHomeIsTimerActive();
 // Retorna true se qualquer timer está no estado RUNNING
 bool screenHomeIsTimerRunning();
 
+// Atualiza timers (RUNNING→DONE) — retorna true se algum acabou de disparar
+bool screenHomeTimerUpdate();
+
 // Persistência do estado dos timers através do deep sleep (item #16)
 struct TimerPersist {
     int      state[MAX_TIMERS];

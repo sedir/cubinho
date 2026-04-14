@@ -12,6 +12,18 @@
 #  define CAL_DBG(fmt, ...) do {} while(0)
 #endif
 
+// ── VTIMEZONE support ─────────────────────────────────────────────────────────
+#define MAX_VTIMEZONES 4
+#define TZ_OFFSET_UNKNOWN (-999999)
+
+struct VTimezone {
+    char tzid[48];
+    int  offsetSec;
+};
+
+static VTimezone _vtimezones[MAX_VTIMEZONES];
+static int _vtimezoneCount = 0;
+
 static CalendarEvent _todayEvents[MAX_CALENDAR_EVENTS];
 static int _todayCount = 0;
 static int _todayTotalCount = 0;
@@ -118,6 +130,11 @@ static bool parseProperty(const String& line, const char* key, String& params, S
     String prefix(key);
     if (!line.startsWith(prefix)) return false;
 
+    int keyLen = prefix.length();
+    if (keyLen >= (int)line.length()) return false;
+    char next = line[keyLen];
+    if (next != ':' && next != ';') return false;
+
     int colon = line.indexOf(':');
     if (colon < 0) return false;
 
@@ -176,6 +193,112 @@ static time_t toTimestamp(struct tm tmValue, bool isUtc)
     return isUtc ? mktimeUtc(tmValue) : mktime(&tmValue);
 }
 
+static int parseTzOffset(const String& value)
+{
+    // Parse iCal offset: +HHMM or -HHMM → seconds
+    if (value.length() < 5) return 0;
+    int sign = (value[0] == '-') ? -1 : 1;
+    int hours = value.substring(1, 3).toInt();
+    int mins  = value.substring(3, 5).toInt();
+    return sign * (hours * 3600 + mins * 60);
+}
+
+// Built-in IANA timezone table (standard-time offsets).
+// Used as fallback when the feed omits VTIMEZONE blocks.
+struct IanaTzEntry { const char* name; int offsetSec; };
+
+static const IanaTzEntry IANA_FALLBACK[] = {
+    // Brazil
+    {"America/Noronha",          -7200},
+    {"America/Belem",           -10800},
+    {"America/Fortaleza",       -10800},
+    {"America/Recife",          -10800},
+    {"America/Araguaina",       -10800},
+    {"America/Maceio",          -10800},
+    {"America/Bahia",           -10800},
+    {"America/Sao_Paulo",       -10800},
+    {"America/Santarem",        -10800},
+    {"America/Manaus",          -14400},
+    {"America/Cuiaba",          -14400},
+    {"America/Campo_Grande",    -14400},
+    {"America/Porto_Velho",     -14400},
+    {"America/Boa_Vista",       -14400},
+    {"America/Rio_Branco",      -18000},
+    {"America/Eirunepe",        -18000},
+    // Americas
+    {"America/New_York",        -18000},
+    {"America/Chicago",         -21600},
+    {"America/Denver",          -25200},
+    {"America/Los_Angeles",     -28800},
+    {"America/Anchorage",       -32400},
+    {"America/Argentina/Buenos_Aires", -10800},
+    {"America/Bogota",          -18000},
+    {"America/Lima",            -18000},
+    {"America/Santiago",        -14400},
+    {"America/Mexico_City",     -21600},
+    // Europe
+    {"Europe/London",                0},
+    {"Europe/Lisbon",                0},
+    {"Europe/Paris",              3600},
+    {"Europe/Berlin",             3600},
+    {"Europe/Madrid",             3600},
+    {"Europe/Rome",               3600},
+    {"Europe/Moscow",            10800},
+    {"Europe/Istanbul",          10800},
+    // Asia / Pacific
+    {"Asia/Dubai",               14400},
+    {"Asia/Kolkata",             19800},
+    {"Asia/Bangkok",             25200},
+    {"Asia/Singapore",           28800},
+    {"Asia/Shanghai",            28800},
+    {"Asia/Hong_Kong",           28800},
+    {"Asia/Taipei",              28800},
+    {"Asia/Seoul",               32400},
+    {"Asia/Tokyo",               32400},
+    {"Australia/Sydney",         36000},
+    {"Pacific/Auckland",         43200},
+    // UTC
+    {"UTC",                          0},
+    {"GMT",                          0},
+};
+
+static const int IANA_FALLBACK_COUNT = sizeof(IANA_FALLBACK) / sizeof(IANA_FALLBACK[0]);
+
+static int extractTzidOffset(const String& params)
+{
+    int pos = params.indexOf("TZID=");
+    if (pos < 0) return TZ_OFFSET_UNKNOWN;
+    String tzid = params.substring(pos + 5);
+    int semi = tzid.indexOf(';');
+    if (semi >= 0) tzid = tzid.substring(0, semi);
+
+    // 1. VTIMEZONE definitions from the feed
+    for (int i = 0; i < _vtimezoneCount; i++) {
+        if (tzid == _vtimezones[i].tzid) {
+            return _vtimezones[i].offsetSec;
+        }
+    }
+
+    // 2. Built-in IANA fallback table
+    for (int i = 0; i < IANA_FALLBACK_COUNT; i++) {
+        if (tzid == IANA_FALLBACK[i].name) {
+            CAL_DBG("TZID \"%s\" via IANA fallback -> offset=%d", tzid.c_str(), IANA_FALLBACK[i].offsetSec);
+            return IANA_FALLBACK[i].offsetSec;
+        }
+    }
+
+    CAL_DBG("TZID \"%s\" desconhecido — usando horario local", tzid.c_str());
+    return TZ_OFFSET_UNKNOWN;
+}
+
+
+static time_t toTimestampTzid(struct tm tmValue, int tzOffsetSec)
+{
+    // Convert timestamp in a known timezone to POSIX:
+    // interpret tm as UTC, then subtract the tz offset
+    return mktimeUtc(tmValue) - tzOffsetSec;
+}
+
 static void sortTodayEvents()
 {
     for (int i = 1; i < _todayCount; i++) {
@@ -206,7 +329,12 @@ static void maybeStoreEvent(const char* title, time_t startTs, time_t endTs, boo
     if (!overlapsToday && startDateKey > 0 && todayDateKey > 0) {
         int effectiveEndKey = (endDateKey > 0) ? endDateKey : startDateKey;
         if (allDay) {
-            overlapsToday = (startDateKey <= todayDateKey && effectiveEndKey > todayDateKey);
+            if (endDateKey <= 0) {
+                // Sem DTEND — evento de dia unico (RFC 5545 §3.6.1)
+                overlapsToday = (startDateKey == todayDateKey);
+            } else {
+                overlapsToday = (startDateKey <= todayDateKey && effectiveEndKey > todayDateKey);
+            }
         } else {
             overlapsToday = (startDateKey == todayDateKey ||
                              effectiveEndKey == todayDateKey ||
@@ -353,6 +481,7 @@ bool calendarFetchToday()
 
     clearCacheForToday();
     setCacheDate(todayInfo);
+    _vtimezoneCount = 0;
     int todayDateKey = (todayInfo.tm_year + 1900) * 10000 +
                        (todayInfo.tm_mon + 1) * 100 +
                        todayInfo.tm_mday;
@@ -384,6 +513,13 @@ bool calendarFetchToday()
     int currentStartDateKey = 0;
     int currentEndDateKey = 0;
 
+    // VTIMEZONE parsing state
+    bool inTimezone = false;
+    bool inTzStandard = false;
+    char currentTzId[48] = "";
+    int currentTzStdOffset = 0;
+    bool hasCurrentTzStd = false;
+
     auto flushEvent = [&]() {
         if (!inEvent || !hasStart) return;
         maybeStoreEvent(currentTitle, currentStart, hasEnd ? currentEnd : 0, currentAllDay,
@@ -409,7 +545,34 @@ bool calendarFetchToday()
             String params;
             String value;
 
-            if (pendingLine == "BEGIN:VEVENT") {
+            if (pendingLine == "BEGIN:VTIMEZONE") {
+                inTimezone = true;
+                currentTzId[0] = '\0';
+                currentTzStdOffset = 0;
+                hasCurrentTzStd = false;
+                inTzStandard = false;
+            } else if (pendingLine == "END:VTIMEZONE") {
+                if (currentTzId[0] && hasCurrentTzStd && _vtimezoneCount < MAX_VTIMEZONES) {
+                    strlcpy(_vtimezones[_vtimezoneCount].tzid, currentTzId,
+                            sizeof(_vtimezones[0].tzid));
+                    _vtimezones[_vtimezoneCount].offsetSec = currentTzStdOffset;
+                    _vtimezoneCount++;
+                    CAL_DBG("VTIMEZONE: \"%s\" -> offset=%d sec", currentTzId, currentTzStdOffset);
+                }
+                inTimezone = false;
+                inTzStandard = false;
+            } else if (inTimezone) {
+                if (pendingLine == "BEGIN:STANDARD") {
+                    inTzStandard = true;
+                } else if (pendingLine == "END:STANDARD") {
+                    inTzStandard = false;
+                } else if (parseProperty(pendingLine, "TZID", params, value)) {
+                    strlcpy(currentTzId, value.c_str(), sizeof(currentTzId));
+                } else if (inTzStandard && parseProperty(pendingLine, "TZOFFSETTO", params, value)) {
+                    currentTzStdOffset = parseTzOffset(value);
+                    hasCurrentTzStd = true;
+                }
+            } else if (pendingLine == "BEGIN:VEVENT") {
                 inEvent = true;
                 currentTitle[0] = '\0';
                 currentStart = 0;
@@ -435,7 +598,14 @@ bool calendarFetchToday()
                 bool isUtc = false;
                 currentStartDateKey = parseDateKey(value);
                 if (parseDateValue(value, tmValue, allDay, isUtc)) {
-                    currentStart = toTimestamp(tmValue, isUtc);
+                    if (isUtc) {
+                        currentStart = mktimeUtc(tmValue);
+                    } else {
+                        int tzOff = extractTzidOffset(params);
+                        currentStart = (tzOff != TZ_OFFSET_UNKNOWN)
+                                     ? toTimestampTzid(tmValue, tzOff)
+                                     : mktime(&tmValue);
+                    }
                     currentAllDay = allDay || params.indexOf("VALUE=DATE") >= 0;
                     hasStart = currentStart > 0;
                     CAL_DBG("  DTSTART raw=\"%s\" params=\"%s\" ts=%ld allDay=%d utc=%d",
@@ -450,7 +620,14 @@ bool calendarFetchToday()
                 bool isUtc = false;
                 currentEndDateKey = parseDateKey(value);
                 if (parseDateValue(value, tmValue, allDay, isUtc)) {
-                    currentEnd = toTimestamp(tmValue, isUtc);
+                    if (isUtc) {
+                        currentEnd = mktimeUtc(tmValue);
+                    } else {
+                        int tzOff = extractTzidOffset(params);
+                        currentEnd = (tzOff != TZ_OFFSET_UNKNOWN)
+                                   ? toTimestampTzid(tmValue, tzOff)
+                                   : mktime(&tmValue);
+                    }
                     hasEnd = currentEnd > 0;
                     CAL_DBG("  DTEND   raw=\"%s\" params=\"%s\" ts=%ld utc=%d",
                             value.c_str(), params.c_str(), (long)currentEnd, (int)isUtc);

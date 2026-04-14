@@ -18,6 +18,7 @@
 #include "ota_manager.h"
 #include "events.h"
 #include "calendar_feed.h"
+#include "bg_network.h"
 #include "chime_wav.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
@@ -220,9 +221,9 @@ static void animateTransition(int fromScreen, int toScreen, int direction) {
 }
 
 // ── Eventos → próximo evento na home (item #24) ──────────────────────────────
-static void updateNextEvent() {
+static void updateNextEvent(bool force = false) {
     static uint32_t lastEventCheck = 0;
-    if (millis() - lastEventCheck < 30000) return;
+    if (!force && millis() - lastEventCheck < 30000) return;
     lastEventCheck = millis();
 
     char buf[48];
@@ -321,14 +322,51 @@ void setup() {
     }
 
     initSprite();
+
+    // ── Splash com progresso (apenas cold boot) ─────────────────────────────
+    // Total de passos: 8 locais + até 4 do WiFi (connect, NTP, clima, calendario)
+    static const int SPLASH_TOTAL = 12;
+    static int       splashStep   = 0;
+
+    // Macro para atualizar splash apenas no cold boot
+    #define SPLASH(msg) do { \
+        if (isColdBoot) { \
+            splashStatus(*fb, msg, ++splashStep, SPLASH_TOTAL); \
+            pushFrame(); \
+        } \
+    } while(0)
+
+    if (isColdBoot) {
+        drawSplash(*fb);
+        pushFrame();
+    }
+
+    SPLASH("Sensor de proximidade...");
     ltr553Init();
+
+    SPLASH("LEDs...");
     ledInit();
+
+    SPLASH("Energia...");
     powerInit();
+
+    SPLASH("Interface...");
     screenHomeInit();
+
+    SPLASH("Telnet...");
     telnetLogInit();
+
+    SPLASH("Eventos...");
     eventsInit();
+
+    SPLASH("Rede...");
+    bgNetworkInit();
+
+    SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
     runtimeConfigApply(g_runtimeCfg);
+
+    #undef SPLASH
 
     const char* wakeReason = isColdBoot  ? "cold-boot"  :
                              isTimerWake ? "timer-wake" : "touch-wake";
@@ -363,9 +401,17 @@ void setup() {
         wifiBeginAsync(weatherData);
     } else {
         LOG_I("main", "Boot inicial — splash + init completo");
-        drawSplash(*fb);
-        pushFrame();
+        // Callback para atualizar splash durante o wifiInit
+        wifiSetProgressCallback([](const char* msg) {
+            splashStep++;
+            splashStatus(*fb, msg, splashStep, SPLASH_TOTAL);
+            pushFrame();
+        });
         wifiInit(weatherData);
+        // Splash final
+        splashStatus(*fb, "Pronto!", SPLASH_TOTAL, SPLASH_TOTAL);
+        pushFrame();
+        delay(400);
         // wifiKeepAlive já aplicado por runtimeConfigApply() acima
         rtcWeather = weatherData;
     }
@@ -571,6 +617,10 @@ void loop() {
 
     // ── WiFi / clima ──
     wifiScheduleUpdate(weatherData);
+    if (wifiBgJustCompleted()) {
+        needsRedraw = true;
+        updateNextEvent(true);
+    }
     wifiCheckPortal();  // item #23
 
     // ── Eventos ──
@@ -595,6 +645,18 @@ void loop() {
         ledOff();
         powerEnterDeepSleep();
         return;
+    }
+
+    // ── Atualiza timers (RUNNING→DONE) — independente da tela ──
+    if (screenHomeTimerUpdate()) {
+        // Timer acabou de disparar — troca para tela do relógio imediatamente
+        if (currentScreen != 0) {
+            LOG_I("main", "Timer disparou — trocando tela %d -> 0", currentScreen);
+            animateTransition(currentScreen, 0, -1);
+            currentScreen = 0;
+        }
+        if (powerIsDim()) powerOnTouch();  // acorda a tela
+        needsRedraw = true;
     }
 
     // ── Alarme sonoro ──

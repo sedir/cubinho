@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "ota_manager.h"
 #include "runtime_config.h"
+#include "bg_network.h"
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
@@ -11,7 +12,7 @@
 #include <time.h>
 
 // ── Estado async ─────────────────────────────────────────────────────────────
-enum AsyncState { ASYNC_IDLE, ASYNC_CONNECTING, ASYNC_NTP_SYNCING };
+enum AsyncState { ASYNC_IDLE, ASYNC_CONNECTING, ASYNC_NTP_SYNCING, ASYNC_BG_FETCHING };
 
 static AsyncState   _state        = ASYNC_IDLE;
 static WeatherData* _asyncOut     = nullptr;
@@ -20,6 +21,8 @@ static bool         _firstFetch         = true;
 static bool         _keepAlive          = false;
 static uint32_t     _lastFetchMs        = 0;
 static uint32_t     _updateIntervalMs   = WEATHER_UPDATE_INTERVAL_MS;
+static bool         _bgJustCompleted    = false;
+static WifiProgressCb _progressCb       = nullptr;
 
 // ── Portal cativo (item #23) ─────────────────────────────────────────────────
 static bool       _portalMode     = false;
@@ -270,18 +273,10 @@ static void wifiOff() {
     LOG_I("wifi", "WiFi OFF");
 }
 
-static void finishAsync() {
-    if (_asyncOut) weatherFetch(*_asyncOut);
-    if (calendarHasFeedConfigured() && !calendarFetchToday()) {
-        LOG_W("wifi", "Calendario indisponivel — mantendo ultimo dado valido");
-    }
-    // Inicializa OTA quando WiFi está ativo com keep-alive (item #21)
-    if (_keepAlive) otaInit();
-    wifiOff();
-    _state       = ASYNC_IDLE;
-    _firstFetch  = false;
-    _lastFetchMs = millis();
-    _failCount   = 0;  // reset falhas no sucesso
+static void startBgFetch() {
+    bgNetworkStartFetch(_asyncOut);
+    _state = ASYNC_BG_FETCHING;
+    LOG_I("wifi", "Fetch delegado ao background (core 0)");
 }
 
 static void pollAsync() {
@@ -294,7 +289,7 @@ static void pollAsync() {
                 bool timeValid = getLocalTime(&_tmcheck, 0) && (time(nullptr) > 1577836800L);
                 if (timeValid) {
                     LOG_I("wifi", "Conectado (RSSI %d dBm) — RTC valido", WiFi.RSSI());
-                    finishAsync();
+                    startBgFetch();
                 } else {
                     LOG_I("wifi", "Conectado (RSSI %d dBm) — NTP sync", WiFi.RSSI());
                     configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
@@ -317,9 +312,24 @@ static void pollAsync() {
             bool timeout = millis() - _asyncStartMs >= 10000;
             if (ntpOk)            LOG_I("wifi", "NTP sincronizado");
             if (timeout && !ntpOk) LOG_W("wifi", "NTP timeout");
-            if (ntpOk || timeout)  finishAsync();
+            if (ntpOk || timeout)  startBgFetch();
             break;
         }
+
+        case ASYNC_BG_FETCHING:
+            if (bgNetworkIsDone()) {
+                if (_asyncOut) bgNetworkConsume(*_asyncOut);
+                // Inicializa OTA quando WiFi está ativo com keep-alive (item #21)
+                if (_keepAlive) otaInit();
+                wifiOff();
+                _state       = ASYNC_IDLE;
+                _firstFetch  = false;
+                _lastFetchMs = millis();
+                _failCount   = 0;
+                _bgJustCompleted = true;
+                LOG_I("wifi", "Background fetch concluido — dados atualizados");
+            }
+            break;
     }
 }
 
@@ -341,7 +351,7 @@ void wifiBeginAsync(WeatherData& out) {
 
     if (WiFi.status() == WL_CONNECTED) {
         LOG_I("wifi", "Ja conectado — buscando clima");
-        finishAsync();
+        startBgFetch();
         return;
     }
 
@@ -355,6 +365,7 @@ bool wifiConnectAndFetch(WeatherData& out) {
     if (_portalMode || _calendarConfigMode) return false;
     loadCredentials();
 
+    if (_progressCb) _progressCb("Conectando WiFi...");
     WiFi.mode(WIFI_STA);
     WiFi.begin(getSSID(), getPass());
     LOG_I("wifi", "Conectando a %s...", getSSID());
@@ -365,6 +376,7 @@ bool wifiConnectAndFetch(WeatherData& out) {
     if (WiFi.status() != WL_CONNECTED) {
         LOG_W("wifi", "Timeout — sem conexao");
         _failCount++;
+        if (_progressCb) _progressCb("WiFi falhou");
         wifiOff();
         return false;
     }
@@ -372,6 +384,7 @@ bool wifiConnectAndFetch(WeatherData& out) {
           WiFi.RSSI(), WiFi.localIP().toString().c_str());
     _failCount = 0;
 
+    if (_progressCb) _progressCb("Sincronizando relogio...");
     configTime(TIMEZONE_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     struct tm timeinfo;
     bool ntpOk = false;
@@ -382,12 +395,16 @@ bool wifiConnectAndFetch(WeatherData& out) {
     if (ntpOk) LOG_I("wifi", "NTP sincronizado");
     else       LOG_W("wifi", "NTP timeout");
 
+    if (_progressCb) _progressCb("Buscando clima...");
     bool weatherOk = weatherFetch(out);
     if (!weatherOk) {
         LOG_W("wifi", "Clima indisponivel — mantendo ultimo dado valido");
     }
-    if (calendarHasFeedConfigured() && !calendarFetchToday()) {
-        LOG_W("wifi", "Calendario indisponivel — mantendo ultimo dado valido");
+    if (calendarHasFeedConfigured()) {
+        if (_progressCb) _progressCb("Buscando calendario...");
+        if (!calendarFetchToday()) {
+            LOG_W("wifi", "Calendario indisponivel — mantendo ultimo dado valido");
+        }
     }
     wifiOff();
     _firstFetch  = false;
@@ -395,10 +412,15 @@ bool wifiConnectAndFetch(WeatherData& out) {
     return true;
 }
 
+void wifiSetProgressCallback(WifiProgressCb cb) {
+    _progressCb = cb;
+}
+
 void wifiInit(WeatherData& weatherData) {
     loadCredentials();
     if (!wifiHasStoredCredentials()) {
         LOG_W("wifi", "Sem credenciais — iniciando portal cativo");
+        if (_progressCb) _progressCb("Sem credenciais WiFi");
         startPortal();
         return;
     }
@@ -407,6 +429,7 @@ void wifiInit(WeatherData& weatherData) {
         LOG_W("wifi", "Falha na conexao no cold boot — iniciando portal cativo");
         startPortal();
     }
+    _progressCb = nullptr;  // limpa callback após init
 }
 
 void wifiScheduleUpdate(WeatherData& weatherData) {
@@ -430,6 +453,14 @@ void wifiForceRefresh(WeatherData& weatherData) {
 }
 
 bool wifiIsFetching() { return _state != ASYNC_IDLE; }
+
+bool wifiBgJustCompleted() {
+    if (_bgJustCompleted) {
+        _bgJustCompleted = false;
+        return true;
+    }
+    return false;
+}
 bool wifiIsPortalMode() { return _portalMode; }
 bool wifiIsCalendarConfigMode() { return _calendarConfigMode; }
 

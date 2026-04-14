@@ -148,6 +148,19 @@ bool screenHomeIsTimerRunning() {
     return false;
 }
 
+// Atualiza timers independentemente da tela — retorna true se algum acabou de disparar
+bool screenHomeTimerUpdate() {
+    bool justFired = false;
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (timerStates[i] == TIMER_RUNNING && getRemaining(i) == 0) {
+            timerStates[i]   = TIMER_DONE;
+            timerRemainMs[i] = 0;
+            justFired = true;
+        }
+    }
+    return justFired;
+}
+
 // Fix #4: RUNNING é salvo como PAUSED (não mais como SETTING)
 TimerPersist screenHomeGetTimerPersist() {
     TimerPersist tp;
@@ -388,13 +401,6 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
         display.drawString("toque para fechar", display.width() / 2, TIMER_HINT_Y);
     } else {
-        // Verificar se algum running chegou a zero
-        for (int i = 0; i < MAX_TIMERS; i++) {
-            if (timerStates[i] == TIMER_RUNNING && getRemaining(i) == 0) {
-                timerStates[i]   = TIMER_DONE;
-                timerRemainMs[i] = 0;
-            }
-        }
 
         // Slot tabs — altura 20 px, fáceis de tocar
         drawSlotTabs(display, TIMER_ZONE_Y + 5);
