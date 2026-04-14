@@ -48,6 +48,8 @@ RTC_DATA_ATTR static int         rtcTimerState[MAX_TIMERS]   = {};
 RTC_DATA_ATTR static int         rtcTimerMinutes[MAX_TIMERS] = { 5, 10, 15 };
 RTC_DATA_ATTR static uint32_t    rtcTimerRemain[MAX_TIMERS]  = { 300000, 600000, 900000 };
 RTC_DATA_ATTR static int         rtcTimerFocused = 0;
+RTC_DATA_ATTR static char        rtcTimerCustomName[MAX_TIMERS][16] = {};
+RTC_DATA_ATTR static bool        rtcTimerHasCustomName[MAX_TIMERS]  = {};
 
 // ── Estado volátil ───────────────────────────────────────────────────────────
 static int         currentScreen  = 0;
@@ -393,9 +395,11 @@ void setup() {
         TimerPersist tp;
         tp.focused = rtcTimerFocused;
         for (int i = 0; i < MAX_TIMERS; i++) {
-            tp.state[i]   = rtcTimerState[i];
-            tp.minutes[i] = rtcTimerMinutes[i];
+            tp.state[i]    = rtcTimerState[i];
+            tp.minutes[i]  = rtcTimerMinutes[i];
             tp.remainMs[i] = rtcTimerRemain[i];
+            strlcpy(tp.customName[i], rtcTimerCustomName[i], sizeof(tp.customName[0]));
+            tp.hasCustomName[i] = rtcTimerHasCustomName[i];
         }
         screenHomeSetTimerPersist(tp);
         wifiBeginAsync(weatherData);
@@ -473,7 +477,11 @@ void loop() {
         int      swipeDeltaY = touch.y - touchStartY;
         bool     isSwipe     = (abs(swipeDeltaX) >= 30 && abs(swipeDeltaX) > abs(swipeDeltaY));
 
-        if (currentScreen == 0 && screenHomeIsAlarmActive()) {
+        // Teclado on-screen intercepta todos os toques quando ativo
+        if (currentScreen == 0 && screenHomeIsKeyboardActive()) {
+            screenHomeKeyboardHandleTouch(touchStartX, touchStartY);
+            needsRedraw = true;
+        } else if (currentScreen == 0 && screenHomeIsAlarmActive()) {
             screenHomeTimerTap(touchStartX);
             needsRedraw = true;
         } else if (isSwipe) {
@@ -535,25 +543,39 @@ void loop() {
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)
             if (touchStartY < TIMER_ZONE_Y + 26) {
-                // Toque na área dos tabs → switch slot
                 int tabW = 48, gap = 6;
                 int startX = 160 - (MAX_TIMERS * tabW + (MAX_TIMERS - 1) * gap) / 2;
                 for (int i = 0; i < MAX_TIMERS; i++) {
                     int tx = startX + i * (tabW + gap);
                     if (touchStartX >= tx && touchStartX <= tx + tabW) {
-                        screenHomeTimerSwitchSlot(i);
+                        if (longPress) {
+                            // Long press no tab → abre teclado para renomear
+                            screenHomeOpenKeyboard(i);
+                            LOG_I("main", "Teclado aberto para T%d", i + 1);
+                        } else {
+                            screenHomeTimerSwitchSlot(i);
+                        }
                         needsRedraw = true;
                         break;
                     }
                 }
-            } else if (longPress) {
-                screenHomeTimerLongPress();
-                LOG_I("main", "Timer T%d: long press", screenHomeGetFocusedSlot() + 1);
-                needsRedraw = true;
             } else {
-                screenHomeTimerTap(touchStartX);
-                LOG_I("main", "Timer T%d: tap (x=%d)", screenHomeGetFocusedSlot() + 1, touchStartX);
-                needsRedraw = true;
+                // Zona de ação do timer
+                bool isVertSwipe = (abs(swipeDeltaY) >= 15 && abs(swipeDeltaY) > abs(swipeDeltaX));
+                if (isVertSwipe) {
+                    // Swipe vertical → ajusta minutos (só em SETTING)
+                    screenHomeTimerSwipeAdjust(-swipeDeltaY);  // cima=negativo deltaY=mais minutos
+                    LOG_I("main", "Timer T%d: swipe %+d min", screenHomeGetFocusedSlot() + 1, -swipeDeltaY / 10);
+                    needsRedraw = true;
+                } else if (longPress) {
+                    screenHomeTimerLongPress();
+                    LOG_I("main", "Timer T%d: long press", screenHomeGetFocusedSlot() + 1);
+                    needsRedraw = true;
+                } else {
+                    screenHomeTimerTap(touchStartX);
+                    LOG_I("main", "Timer T%d: tap", screenHomeGetFocusedSlot() + 1);
+                    needsRedraw = true;
+                }
             }
         } else if (currentScreen == 1 && longPress) {
             // Long press na tela do clima → força atualização imediata
@@ -640,6 +662,8 @@ void loop() {
             rtcTimerState[i]   = tp.state[i];
             rtcTimerMinutes[i] = tp.minutes[i];
             rtcTimerRemain[i]  = tp.remainMs[i];
+            strlcpy(rtcTimerCustomName[i], tp.customName[i], sizeof(rtcTimerCustomName[0]));
+            rtcTimerHasCustomName[i] = tp.hasCustomName[i];
         }
 
         ledOff();

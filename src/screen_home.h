@@ -15,6 +15,12 @@ void        screenHomeSetTimerLabelPreset(int slot, int presetIdx);
 // Chamados pelo handler de toque em main.cpp
 void screenHomeTimerTap(int tapX);
 void screenHomeTimerLongPress();
+void screenHomeTimerSwipeAdjust(int deltaY);   // swipe vertical ajusta minutos (SETTING)
+
+// Teclado on-screen para renomear slots
+bool screenHomeIsKeyboardActive();
+void screenHomeOpenKeyboard(int slot);
+void screenHomeKeyboardHandleTouch(int x, int y);
 
 // Troca o slot focado do timer (item #16)
 void screenHomeTimerSwitchSlot(int slot);
@@ -40,6 +46,8 @@ struct TimerPersist {
     int      minutes[MAX_TIMERS];
     uint32_t remainMs[MAX_TIMERS];
     int      focused;
+    char     customName[MAX_TIMERS][16];
+    bool     hasCustomName[MAX_TIMERS];
 };
 TimerPersist screenHomeGetTimerPersist();
 void         screenHomeSetTimerPersist(const TimerPersist& p);

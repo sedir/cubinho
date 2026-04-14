@@ -2,6 +2,7 @@
 #include "status_ui.h"
 #include "theme.h"
 #include "config.h"
+#include "logger.h"
 #include <time.h>
 
 static const char* DIAS[]  = { "dom", "seg", "ter", "qua", "qui", "sex", "sab" };
@@ -21,6 +22,8 @@ static int        timerMinutes[MAX_TIMERS]  = { 5, 10, 15 };
 static uint32_t   timerRemainMs[MAX_TIMERS] = { 5*60000, 10*60000, 15*60000 };
 static uint32_t   timerStartMs[MAX_TIMERS]  = { 0, 0, 0 };
 static int        timerLabelPreset[MAX_TIMERS] = { 0, 1, 2 };
+static char       timerCustomName[MAX_TIMERS][16] = { {0}, {0}, {0} };
+static bool       timerHasCustomName[MAX_TIMERS]  = { false, false, false };
 static int        focusedSlot = 0;
 
 // Evento próximo (item #24)
@@ -47,6 +50,8 @@ int screenHomeGetTimerLabelPreset(int slot) {
 }
 
 const char* screenHomeGetTimerLabel(int slot) {
+    if (slot >= 0 && slot < MAX_TIMERS && timerHasCustomName[slot] && timerCustomName[slot][0])
+        return timerCustomName[slot];
     return screenHomeGetTimerLabelPresetName(screenHomeGetTimerLabelPreset(slot));
 }
 
@@ -67,11 +72,7 @@ void screenHomeTimerTap(int tapX) {
 
     switch (timerStates[s]) {
         case TIMER_SETTING:
-            if (tapX < 160) timerMinutes[s] = max(1,  timerMinutes[s] - 1);
-            else             timerMinutes[s] = min(99, timerMinutes[s] + 1);
-            timerRemainMs[s] = (uint32_t)timerMinutes[s] * 60000;
-            M5.Speaker.tone(80, 30);   // vibração tátil
-            M5.Speaker.tone(800, 20);
+            // Ajuste de minutos agora é feito por swipe vertical — tap sem efeito
             break;
         case TIMER_RUNNING:
             timerRemainMs[s] = getRemaining(s);
@@ -106,6 +107,18 @@ void screenHomeTimerLongPress() {
             timerRemainMs[s] = (uint32_t)timerMinutes[s] * 60000;
             break;
     }
+}
+
+void screenHomeTimerSwipeAdjust(int deltaY) {
+    int s = focusedSlot;
+    if (timerStates[s] != TIMER_SETTING) return;
+    // deltaY > 0: swipe para cima → mais minutos; < 0: para baixo → menos
+    int delta = deltaY / 10;
+    if (delta == 0) delta = (deltaY > 0) ? 1 : -1;
+    delta = constrain(delta, -20, 20);
+    timerMinutes[s] = constrain(timerMinutes[s] + delta, 1, 99);
+    timerRemainMs[s] = (uint32_t)timerMinutes[s] * 60000;
+    M5.Speaker.tone(deltaY > 0 ? 880 : 660, 25);
 }
 
 void screenHomeTimerSwitchSlot(int slot) {
@@ -161,7 +174,7 @@ bool screenHomeTimerUpdate() {
     return justFired;
 }
 
-// Fix #4: RUNNING é salvo como PAUSED (não mais como SETTING)
+// RUNNING é salvo como PAUSED para persistência no deep sleep
 TimerPersist screenHomeGetTimerPersist() {
     TimerPersist tp;
     tp.focused = focusedSlot;
@@ -171,6 +184,8 @@ TimerPersist screenHomeGetTimerPersist() {
         tp.state[i]    = s;
         tp.minutes[i]  = timerMinutes[i];
         tp.remainMs[i] = getRemaining(i);
+        strlcpy(tp.customName[i], timerCustomName[i], sizeof(tp.customName[0]));
+        tp.hasCustomName[i] = timerHasCustomName[i];
     }
     return tp;
 }
@@ -179,6 +194,8 @@ void screenHomeSetTimerPersist(const TimerPersist& p) {
     focusedSlot = (p.focused >= 0 && p.focused < MAX_TIMERS) ? p.focused : 0;
     for (int i = 0; i < MAX_TIMERS; i++) {
         timerMinutes[i] = (p.minutes[i] >= 1 && p.minutes[i] <= 99) ? p.minutes[i] : 5;
+        strlcpy(timerCustomName[i], p.customName[i], sizeof(timerCustomName[0]));
+        timerHasCustomName[i] = p.hasCustomName[i];
         if (p.state[i] == 2 && p.remainMs[i] > 0) {
             timerStates[i]   = TIMER_PAUSED;
             timerRemainMs[i] = p.remainMs[i];
@@ -201,11 +218,11 @@ static void drawPauseIcon(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
     d.fillRect(cx - 7, cy - 9, 5, 18, c);
     d.fillRect(cx + 2, cy - 9, 5, 18, c);
 }
-static void drawLeftArrow(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
-    d.fillTriangle(cx + 7, cy - 8, cx + 7, cy + 8, cx - 7, cy, c);
+static void drawUpArrow(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
+    d.fillTriangle(cx, cy - 7, cx - 7, cy + 6, cx + 7, cy + 6, c);
 }
-static void drawRightArrow(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
-    d.fillTriangle(cx - 7, cy - 8, cx - 7, cy + 8, cx + 7, cy, c);
+static void drawDownArrow(lgfx::LovyanGFX& d, int cx, int cy, uint16_t c) {
+    d.fillTriangle(cx, cy + 7, cx - 7, cy - 6, cx + 7, cy - 6, c);
 }
 
 static void drawFocusedTimerLabel(lgfx::LovyanGFX& d, int slot, int y, uint16_t color) {
@@ -221,6 +238,182 @@ static const int TIMER_LABEL_Y   = 148;
 static const int TIMER_VALUE_Y   = 176;
 static const int TIMER_HINT_Y    = 206;
 static const int TIMER_SUMMARY_Y = 198;
+
+// ── Teclado on-screen ────────────────────────────────────────────────────────
+static bool keyboardActive = false;
+static int  keyboardSlot   = 0;
+static char keyboardBuf[16] = "";
+
+static const char* KB_ROW1 = "QWERTYUIOP";  // 10 teclas
+static const char* KB_ROW2 = "ASDFGHJKL";   //  9 teclas
+static const char* KB_ROW3 = "ZXCVBNM";     //  7 teclas + DEL
+
+// Layout: input (h=42) + 4 linhas de teclas (h=42 cada, gap=3)
+static const int KB_INPUT_H  = 42;
+static const int KB_KEY_W    = 28;
+static const int KB_KEY_H    = 42;
+static const int KB_GAP      = 3;
+static const int KB_ROW1_Y   = KB_INPUT_H + 2;
+static const int KB_ROW2_Y   = KB_ROW1_Y + KB_KEY_H + KB_GAP;
+static const int KB_ROW3_Y   = KB_ROW2_Y + KB_KEY_H + KB_GAP;
+static const int KB_ROW4_Y   = KB_ROW3_Y + KB_KEY_H + KB_GAP;
+// startX para cada linha (centralizado em 320px)
+static const int KB_ROW1_X   = (320 - (10 * 28 + 9 * 3)) / 2;   //  6
+static const int KB_ROW2_X   = (320 - ( 9 * 28 + 8 * 3)) / 2;   // 22
+
+static void drawKbKey(lgfx::LovyanGFX& d, int x, int y, int w, int h, const char* label, uint16_t bg, uint16_t fg) {
+    d.fillRoundRect(x, y, w, h, 4, bg);
+    d.drawRoundRect(x, y, w, h, 4, 0x4208);
+    d.setFont(&fonts::Font0);
+    d.setTextDatum(MC_DATUM);
+    d.setTextColor(fg, bg);
+    d.drawString(label, x + w / 2, y + h / 2);
+}
+
+static void drawKeyboardOverlay(lgfx::LovyanGFX& d) {
+    // Fundo completo
+    d.fillScreen(COLOR_BACKGROUND);
+
+    // Área de input
+    d.fillRect(0, 0, 320, KB_INPUT_H, 0x1082);
+    d.drawFastHLine(0, KB_INPUT_H, 320, 0x4208);
+
+    char slotLabel[6];
+    snprintf(slotLabel, sizeof(slotLabel), "T%d:", keyboardSlot + 1);
+    d.setFont(&fonts::Font0);
+    d.setTextColor(COLOR_TEXT_ACCENT, 0x1082);
+    d.setTextDatum(ML_DATUM);
+    d.drawString(slotLabel, 8, KB_INPUT_H / 2);
+
+    // Texto digitado + cursor piscante
+    char dispBuf[18];
+    strlcpy(dispBuf, keyboardBuf, sizeof(dispBuf));
+    if ((millis() / 500) % 2 == 0 && strlen(dispBuf) < 15)
+        strncat(dispBuf, "_", sizeof(dispBuf) - strlen(dispBuf) - 1);
+    d.setTextColor(TFT_WHITE, 0x1082);
+    d.setTextDatum(ML_DATUM);
+    d.drawString(dispBuf, 36, KB_INPUT_H / 2);
+
+    // Botão cancelar (×)
+    d.fillRoundRect(284, 6, 30, 30, 4, 0x4208);
+    d.setTextDatum(MC_DATUM);
+    d.setTextColor(TFT_WHITE, 0x4208);
+    d.drawString("X", 299, 21);
+
+    // Linha 1: QWERTYUIOP
+    for (int i = 0; i < 10; i++) {
+        int x = KB_ROW1_X + i * (KB_KEY_W + KB_GAP);
+        char label[2] = { KB_ROW1[i], 0 };
+        drawKbKey(d, x, KB_ROW1_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
+    }
+    // Linha 2: ASDFGHJKL
+    for (int i = 0; i < 9; i++) {
+        int x = KB_ROW2_X + i * (KB_KEY_W + KB_GAP);
+        char label[2] = { KB_ROW2[i], 0 };
+        drawKbKey(d, x, KB_ROW2_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
+    }
+    // Linha 3: ZXCVBNM + DEL
+    static const int KB_DEL_W   = KB_KEY_W + 14;  // 42px
+    static const int KB_ROW3_TW = 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + KB_DEL_W;
+    static const int KB_ROW3_X  = (320 - KB_ROW3_TW) / 2;
+    for (int i = 0; i < 7; i++) {
+        int x = KB_ROW3_X + i * (KB_KEY_W + KB_GAP);
+        char label[2] = { KB_ROW3[i], 0 };
+        drawKbKey(d, x, KB_ROW3_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
+    }
+    int delX = KB_ROW3_X + 7 * (KB_KEY_W + KB_GAP);
+    drawKbKey(d, delX, KB_ROW3_Y, KB_DEL_W, KB_KEY_H, "<", 0x3186, TFT_WHITE);
+
+    // Linha 4: ESPAÇO + OK
+    static const int KB_SPACE_W = 180;
+    static const int KB_OK_W    = 80;
+    static const int KB_ROW4_TW = KB_SPACE_W + KB_GAP + KB_OK_W;
+    static const int KB_ROW4_X  = (320 - KB_ROW4_TW) / 2;
+    drawKbKey(d, KB_ROW4_X, KB_ROW4_Y, KB_SPACE_W, KB_KEY_H, "ESPACO", 0x2124, TFT_WHITE);
+    drawKbKey(d, KB_ROW4_X + KB_SPACE_W + KB_GAP, KB_ROW4_Y, KB_OK_W, KB_KEY_H, "OK", 0x0460, COLOR_TIMER_RUNNING);
+}
+
+bool screenHomeIsKeyboardActive() { return keyboardActive; }
+
+void screenHomeOpenKeyboard(int slot) {
+    keyboardSlot = slot;
+    strlcpy(keyboardBuf, screenHomeGetTimerLabel(slot), sizeof(keyboardBuf));
+    keyboardActive = true;
+    LOG_I("timer", "Teclado aberto para T%d", slot + 1);
+}
+
+void screenHomeKeyboardHandleTouch(int x, int y) {
+    if (!keyboardActive) return;
+
+    // Botão cancelar
+    if (x >= 284 && x <= 314 && y >= 6 && y <= 36) {
+        keyboardActive = false;
+        M5.Speaker.tone(300, 30);
+        return;
+    }
+    // Linha 1
+    if (y >= KB_ROW1_Y && y < KB_ROW1_Y + KB_KEY_H) {
+        for (int i = 0; i < 10; i++) {
+            int kx = KB_ROW1_X + i * (KB_KEY_W + KB_GAP);
+            if (x >= kx && x < kx + KB_KEY_W) {
+                char ch[2] = { KB_ROW1[i], 0 };
+                if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                M5.Speaker.tone(880, 12); return;
+            }
+        }
+    }
+    // Linha 2
+    if (y >= KB_ROW2_Y && y < KB_ROW2_Y + KB_KEY_H) {
+        for (int i = 0; i < 9; i++) {
+            int kx = KB_ROW2_X + i * (KB_KEY_W + KB_GAP);
+            if (x >= kx && x < kx + KB_KEY_W) {
+                char ch[2] = { KB_ROW2[i], 0 };
+                if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                M5.Speaker.tone(880, 12); return;
+            }
+        }
+    }
+    // Linha 3
+    if (y >= KB_ROW3_Y && y < KB_ROW3_Y + KB_KEY_H) {
+        const int delW  = KB_KEY_W + 14;
+        const int r3tw  = 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + delW;
+        const int r3x   = (320 - r3tw) / 2;
+        const int delX  = r3x + 7 * (KB_KEY_W + KB_GAP);
+        if (x >= delX && x < delX + delW) {
+            int len = strlen(keyboardBuf);
+            if (len > 0) keyboardBuf[len - 1] = '\0';
+            M5.Speaker.tone(400, 20); return;
+        }
+        for (int i = 0; i < 7; i++) {
+            int kx = r3x + i * (KB_KEY_W + KB_GAP);
+            if (x >= kx && x < kx + KB_KEY_W) {
+                char ch[2] = { KB_ROW3[i], 0 };
+                if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                M5.Speaker.tone(880, 12); return;
+            }
+        }
+    }
+    // Linha 4
+    if (y >= KB_ROW4_Y && y < KB_ROW4_Y + KB_KEY_H) {
+        const int spaceW = 180, okW = 80;
+        const int r4tw   = spaceW + KB_GAP + okW;
+        const int r4x    = (320 - r4tw) / 2;
+        const int okX    = r4x + spaceW + KB_GAP;
+        if (x >= r4x && x < r4x + spaceW) {
+            size_t klen = strlen(keyboardBuf);
+            if (klen < 15) { keyboardBuf[klen] = ' '; keyboardBuf[klen + 1] = '\0'; }
+            M5.Speaker.tone(880, 12); return;
+        }
+        if (x >= okX && x < okX + okW) {
+            strlcpy(timerCustomName[keyboardSlot], keyboardBuf, sizeof(timerCustomName[0]));
+            timerHasCustomName[keyboardSlot] = (strlen(keyboardBuf) > 0);
+            keyboardActive = false;
+            LOG_I("timer", "T%d renomeado para \"%s\"", keyboardSlot + 1, keyboardBuf);
+            M5.Speaker.tone(880, 60);
+            return;
+        }
+    }
+}
 
 static void trimSummary(char* text) {
     size_t len = strlen(text);
@@ -298,7 +491,7 @@ static bool drawOtherTimersSummary(lgfx::LovyanGFX& d, int focused, int y) {
     return true;
 }
 
-// ── Slot tabs (T1 T2 T3) ────────────────────────────────────────────────────
+// ── Slot tabs (T1 T2 T3) com barra de progresso ─────────────────────────────
 static void drawSlotTabs(lgfx::LovyanGFX& d, int y) {
     d.setFont(&fonts::Font0);
     const int tabW = 48, tabH = 20, gap = 6;
@@ -318,14 +511,35 @@ static void drawSlotTabs(lgfx::LovyanGFX& d, int y) {
 
         char label[4];
         snprintf(label, sizeof(label), "T%d", i + 1);
+        // Desloca rótulo ligeiramente para cima quando há barra de progresso
+        int textY = (active || done) ? y + tabH / 2 - 2 : y + tabH / 2;
         d.setTextColor(fg, bg);
         d.setTextDatum(MC_DATUM);
-        d.drawString(label, tx + tabW / 2, y + tabH / 2);
+        d.drawString(label, tx + tabW / 2, textY);
+
+        // Barra de progresso na base do tab
+        if (active || done) {
+            uint32_t total   = (uint32_t)timerMinutes[i] * 60000;
+            uint32_t rem     = getRemaining(i);
+            float    prog    = done ? 1.0f : (total > 0 ? (float)(total - rem) / (float)total : 0.0f);
+            int      barMaxW = tabW - 4;
+            int      barW    = (int)(barMaxW * prog);
+            uint16_t barBg   = focused ? 0x4208 : 0x2104;
+            uint16_t barFg   = done ? TFT_RED : COLOR_TIMER_RUNNING;
+            d.fillRect(tx + 2, y + tabH - 4, barMaxW, 3, barBg);
+            if (barW > 0) d.fillRect(tx + 2, y + tabH - 4, barW, 3, barFg);
+        }
     }
 }
 
 // ── Desenho da tela ──────────────────────────────────────────────────────────
 void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
+    // Teclado on-screen tem prioridade sobre o resto
+    if (keyboardActive) {
+        drawKeyboardOverlay(display);
+        return;
+    }
+
     display.fillScreen(COLOR_BACKGROUND);
 
     // --- Data + evento + bateria ---
@@ -440,9 +654,11 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
             drawPlayIcon(display, iconX, timerY, timerColor);
 
         if (timerStates[s] == TIMER_SETTING) {
-            // Setas nas bordas — área de toque generosa
-            drawLeftArrow(display, 22, timerY, COLOR_TEXT_SUBTLE);
-            drawRightArrow(display, display.width() - 22, timerY, COLOR_TEXT_SUBTLE);
+            // Setas cima/baixo indicam swipe vertical para ajustar minutos
+            drawUpArrow(display,   22,                    timerY - 12, COLOR_TEXT_SUBTLE);
+            drawDownArrow(display, 22,                    timerY + 12, COLOR_TEXT_SUBTLE);
+            drawUpArrow(display,   display.width() - 22,  timerY - 12, COLOR_TEXT_SUBTLE);
+            drawDownArrow(display, display.width() - 22,  timerY + 12, COLOR_TEXT_SUBTLE);
             if (!hasOtherSummary) {
                 display.setFont(&fonts::FreeSans9pt7b);
                 display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
