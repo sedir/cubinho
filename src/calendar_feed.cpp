@@ -1,9 +1,16 @@
 #include "calendar_feed.h"
 #include "logger.h"
 #include "runtime_config.h"
+#include "config.h"
 #include <HTTPClient.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
+
+#if CALENDAR_DEBUG
+#  define CAL_DBG(fmt, ...) LOG_I("cal_dbg", fmt, ##__VA_ARGS__)
+#else
+#  define CAL_DBG(fmt, ...) do {} while(0)
+#endif
 
 static CalendarEvent _todayEvents[MAX_CALENDAR_EVENTS];
 static int _todayCount = 0;
@@ -207,8 +214,14 @@ static void maybeStoreEvent(const char* title, time_t startTs, time_t endTs, boo
         }
     }
 
-    if (!overlapsToday) return;
+    if (!overlapsToday) {
+        CAL_DBG("  REJEITADO (fora de hoje) title=\"%s\" startKey=%d endKey=%d todayKey=%d",
+                title, startDateKey, endDateKey, todayDateKey);
+        return;
+    }
 
+    CAL_DBG("  ACEITO title=\"%s\" allDay=%d startTs=%ld endTs=%ld",
+            title, (int)allDay, (long)startTs, (long)endTs);
     _todayTotalCount++;
     if (_todayCount >= MAX_CALENDAR_EVENTS) return;
 
@@ -280,36 +293,55 @@ bool calendarFetchToday()
 
     char rawCalendarUrl[192];
     char calendarUrl[192];
+    char fetchUrl[220];
     runtimeConfigGetCalendarUrl(rawCalendarUrl, sizeof(rawCalendarUrl));
     normalizeCalendarUrl(rawCalendarUrl, calendarUrl, sizeof(calendarUrl));
+    // Cache-busting: parâmetro único por fetch garante miss no CDN do iCloud
+    bool hasQuery = strchr(calendarUrl, '?') != nullptr;
+    snprintf(fetchUrl, sizeof(fetchUrl), "%s%s_=%lu",
+             calendarUrl, hasQuery ? "&" : "?", (unsigned long)time(nullptr));
     WiFiClient plainClient;
     WiFiClientSecure secureClient;
     HTTPClient http;
     int httpCode = -1;
+    int contentLength = -1;
     String payload;
+
+    auto configHttp = [&](HTTPClient& h) {
+        h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        h.setTimeout(10000);
+        h.addHeader("User-Agent", "Portela/1.0");
+        h.addHeader("Cache-Control", "no-cache, no-store");
+        h.addHeader("Pragma", "no-cache");
+        h.addHeader("Connection", "close");
+    };
 
     if (strncmp(calendarUrl, "https://", 8) == 0) {
         secureClient.setInsecure();
-        if (!http.begin(secureClient, calendarUrl)) {
+        if (!http.begin(secureClient, fetchUrl)) {
             LOG_E("calendar", "Falha ao iniciar HTTPClient HTTPS");
             _status = CAL_STATUS_ERROR;
             return false;
         }
-        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        http.setTimeout(10000);
+        configHttp(http);
         httpCode = http.GET();
-        if (httpCode == 200) payload = http.getString();
+        if (httpCode == 200) {
+            contentLength = http.getSize();
+            payload = http.getString();
+        }
         http.end();
     } else {
-        if (!http.begin(plainClient, calendarUrl)) {
+        if (!http.begin(plainClient, fetchUrl)) {
             LOG_E("calendar", "Falha ao iniciar HTTPClient");
             _status = CAL_STATUS_ERROR;
             return false;
         }
-        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        http.setTimeout(10000);
+        configHttp(http);
         httpCode = http.GET();
-        if (httpCode == 200) payload = http.getString();
+        if (httpCode == 200) {
+            contentLength = http.getSize();
+            payload = http.getString();
+        }
         http.end();
     }
 
@@ -324,6 +356,23 @@ bool calendarFetchToday()
     int todayDateKey = (todayInfo.tm_year + 1900) * 10000 +
                        (todayInfo.tm_mon + 1) * 100 +
                        todayInfo.tm_mday;
+
+    // iCloud usa chunked transfer (sem Content-Length) — única forma de detectar
+    // truncamento é checar se END:VCALENDAR está presente no payload.
+    if (contentLength > 0 && (int)payload.length() < contentLength) {
+        LOG_W("calendar", "Payload truncado: recebido %d de %d bytes — feed ignorado",
+              payload.length(), contentLength);
+        _status = CAL_STATUS_ERROR;
+        return false;
+    }
+    if (payload.indexOf("END:VCALENDAR") < 0) {
+        LOG_W("calendar", "END:VCALENDAR ausente — payload truncado (%d bytes) — feed ignorado",
+              payload.length());
+        _status = CAL_STATUS_ERROR;
+        return false;
+    }
+    CAL_DBG("Fetch OK (%d bytes, Content-Length=%d) todayKey=%d todayStart=%ld tomorrowStart=%ld",
+            payload.length(), contentLength, todayDateKey, (long)todayStart, (long)tomorrowStart);
 
     bool inEvent = false;
     char currentTitle[40] = "";
@@ -370,11 +419,16 @@ bool calendarFetchToday()
                 hasEnd = false;
                 currentStartDateKey = 0;
                 currentEndDateKey = 0;
+                CAL_DBG("--- BEGIN:VEVENT ---");
             } else if (pendingLine == "END:VEVENT") {
+                CAL_DBG("END:VEVENT title=\"%s\" start=%ld end=%ld allDay=%d hasStart=%d",
+                        currentTitle, (long)currentStart, (long)currentEnd,
+                        (int)currentAllDay, (int)hasStart);
                 flushEvent();
                 inEvent = false;
             } else if (inEvent && parseProperty(pendingLine, "SUMMARY", params, value)) {
                 unescapeIcsText(value, currentTitle, sizeof(currentTitle));
+                CAL_DBG("  SUMMARY: \"%s\"", currentTitle);
             } else if (inEvent && parseProperty(pendingLine, "DTSTART", params, value)) {
                 struct tm tmValue = {};
                 bool allDay = false;
@@ -384,6 +438,11 @@ bool calendarFetchToday()
                     currentStart = toTimestamp(tmValue, isUtc);
                     currentAllDay = allDay || params.indexOf("VALUE=DATE") >= 0;
                     hasStart = currentStart > 0;
+                    CAL_DBG("  DTSTART raw=\"%s\" params=\"%s\" ts=%ld allDay=%d utc=%d",
+                            value.c_str(), params.c_str(), (long)currentStart,
+                            (int)currentAllDay, (int)isUtc);
+                } else {
+                    CAL_DBG("  DTSTART parse FALHOU raw=\"%s\"", value.c_str());
                 }
             } else if (inEvent && parseProperty(pendingLine, "DTEND", params, value)) {
                 struct tm tmValue = {};
@@ -393,6 +452,10 @@ bool calendarFetchToday()
                 if (parseDateValue(value, tmValue, allDay, isUtc)) {
                     currentEnd = toTimestamp(tmValue, isUtc);
                     hasEnd = currentEnd > 0;
+                    CAL_DBG("  DTEND   raw=\"%s\" params=\"%s\" ts=%ld utc=%d",
+                            value.c_str(), params.c_str(), (long)currentEnd, (int)isUtc);
+                } else {
+                    CAL_DBG("  DTEND parse FALHOU raw=\"%s\"", value.c_str());
                 }
             }
         }

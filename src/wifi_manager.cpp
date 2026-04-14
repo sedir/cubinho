@@ -93,6 +93,16 @@ button:hover{background:#c81e45}
 </form></div></body></html>
 )rawliteral";
 
+static void appendHtmlEscaped(String& out, const char* input) {
+    for (const char* p = input; *p; p++) {
+        if      (*p == '&')  out += F("&amp;");
+        else if (*p == '"')  out += F("&quot;");
+        else if (*p == '<')  out += F("&lt;");
+        else if (*p == '>')  out += F("&gt;");
+        else                 out += *p;
+    }
+}
+
 static String buildCalendarConfigHtml() {
     char currentUrl[192];
     runtimeConfigGetCalendarUrl(currentUrl, sizeof(currentUrl));
@@ -100,7 +110,7 @@ static String buildCalendarConfigHtml() {
     const char* statusLabel = calendarGetStatusLabel();
 
     String html;
-    html.reserve(1400);
+    html.reserve(1500);
     html += F("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
     html += F("<title>Portela Calendar</title><style>");
     html += F("body{font-family:sans-serif;background:#111827;color:#e5e7eb;display:flex;justify-content:center;padding:28px}");
@@ -108,7 +118,8 @@ static String buildCalendarConfigHtml() {
     html += F("h1{color:#f59e0b;text-align:center;margin:0 0 10px}");
     html += F("p{color:#9ca3af;line-height:1.4}label{display:block;margin:16px 0 6px}");
     html += F("input{width:100%;padding:12px;border:1px solid #374151;border-radius:8px;background:#0f172a;color:#e5e7eb;box-sizing:border-box;font-size:14px}");
-    html += F("button{width:100%;padding:14px;margin-top:18px;background:#f59e0b;color:#111827;border:none;border-radius:8px;font-size:16px;font-weight:700}");
+    html += F("button{width:100%;padding:14px;margin-top:18px;background:#f59e0b;color:#111827;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer}");
+    html += F("button:hover{background:#d97706}button:active{background:#b45309}");
     html += F(".tip{font-size:12px;color:#9ca3af;margin-top:14px}.status{margin:14px 0;padding:12px;border-radius:10px;background:#0f172a;border:1px solid #374151}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#374151;font-size:12px;font-weight:700;margin-right:8px}</style></head><body><div class=\"c\">");
     html += F("<h1>Calendario iCal</h1><p>Cole aqui a URL privada do feed iCal/ICS. O campo abaixo mostra a URL atualmente salva no aparelho. Salvar vazio desativa a integracao.</p>");
     html += F("<div class=\"status\"><span class=\"tag\">");
@@ -117,7 +128,7 @@ static String buildCalendarConfigHtml() {
     html += statusText;
     html += F("</div>");
     html += F("<form method=\"POST\" action=\"/save\"><label>URL do calendario</label><input name=\"url\" value=\"");
-    html += currentUrl;
+    appendHtmlEscaped(html, currentUrl);
     html += F("\" placeholder=\"https://.../basic.ics\" autocomplete=\"off\">");
     html += F("<button type=\"submit\">Salvar</button></form>");
     html += F("<div class=\"tip\">A pagina fica ativa apenas enquanto este modo estiver aberto no dispositivo.</div>");
@@ -218,30 +229,17 @@ static void startCalendarConfigServer() {
         String url = _webServer->arg("url");
         url.trim();
         runtimeConfigSaveCalendarUrl(url.c_str());
-        bool fetchOk = false;
-        if (url.length() == 0) {
-            fetchOk = false;
-        } else {
-            fetchOk = calendarFetchToday();
-        }
 
         String html;
-        html.reserve(640);
+        html.reserve(480);
         html += F("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style='font-family:sans-serif;background:#111827;color:#e5e7eb;padding:28px'>");
         html += F("<div style='max-width:560px;margin:0 auto;background:#1f2937;padding:28px;border-radius:16px'>");
         html += F("<h2 style='margin-top:0;color:#f59e0b'>Configuracao do calendario</h2>");
         if (url.length() == 0) {
             html += F("<p>Calendario desativado. Nenhuma URL ficou salva.</p>");
-        } else if (fetchOk) {
-            html += F("<p>URL salva e validada com sucesso.</p>");
-            html += F("<p style='color:#9ca3af'>");
-            html += calendarGetStatusText();
-            html += F("</p>");
         } else {
-            html += F("<p>URL salva, mas a validacao falhou.</p>");
-            html += F("<p style='color:#9ca3af'>");
-            html += calendarGetStatusText();
-            html += F("</p>");
+            html += F("<p>URL salva com sucesso.</p>");
+            html += F("<p style='color:#9ca3af'>O dispositivo ira validar o feed na proxima conexao.</p>");
         }
         html += F("<p style='color:#9ca3af'>A tela do dispositivo sera fechada em instantes.</p></div></body></html>");
         _webServer->send(200, "text/html", html);

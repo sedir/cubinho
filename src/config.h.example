@@ -75,3 +75,6 @@
 // Portal cativo WiFi — entra em modo AP para configuração após N falhas
 #define WIFI_PORTAL_FAIL_THRESHOLD  3
 #define WIFI_PORTAL_AP_NAME         "Portela-Setup"
+
+// Debug — log verboso do parsing iCal (desative em produção)
+#define CALENDAR_DEBUG  false
