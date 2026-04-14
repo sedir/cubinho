@@ -33,9 +33,9 @@ bool weatherFetch(WeatherData& out) {
     snprintf(url, sizeof(url),
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=%.4f&longitude=%.4f"
-        "&current=temperature_2m,relative_humidity_2m,weather_code,windspeed_10m"
+        "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code"
-        "&hourly=temperature_2m,weather_code"
+        "&hourly=temperature_2m,weather_code,precipitation_probability"
         "&timezone=auto&forecast_days=2",
         GEO_LATITUDE, GEO_LONGITUDE);
 
@@ -62,12 +62,14 @@ bool weatherFetch(WeatherData& out) {
 
     JsonDocument filter;
     filter["current"]["temperature_2m"] = true;
+    filter["current"]["apparent_temperature"] = true;
     filter["current"]["relative_humidity_2m"] = true;
     filter["current"]["weather_code"] = true;
     filter["daily"]["temperature_2m_max"][0] = true;
     filter["daily"]["temperature_2m_min"][0] = true;
     filter["hourly"]["temperature_2m"] = true;
     filter["hourly"]["weather_code"] = true;
+    filter["hourly"]["precipitation_probability"] = true;
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload,
@@ -88,6 +90,9 @@ bool weatherFetch(WeatherData& out) {
     // Dados atuais e diários
     out.tempPrevious = prevTemp;
     out.tempCurrent  = doc["current"]["temperature_2m"].as<float>();
+    out.apparentTemp = doc["current"]["apparent_temperature"].isNull()
+                           ? NAN
+                           : doc["current"]["apparent_temperature"].as<float>();
     out.humidity     = doc["current"]["relative_humidity_2m"].as<float>();
     out.weatherCode  = doc["current"]["weather_code"].as<int>();
     out.tempMax      = doc["daily"]["temperature_2m_max"][0].as<float>();
@@ -112,6 +117,7 @@ bool weatherFetch(WeatherData& out) {
     // Contar horas disponíveis no JSON
     JsonArray hourlyTemps = doc["hourly"]["temperature_2m"];
     JsonArray hourlyCodes = doc["hourly"]["weather_code"];
+    JsonArray hourlyPrecip = doc["hourly"]["precipitation_probability"];
     int available = min((int)hourlyTemps.size(), 48);
     out.hourlyCount = 0;
 
@@ -120,6 +126,9 @@ bool weatherFetch(WeatherData& out) {
         if (idx >= available) break;
         out.hourlyTemp[i] = hourlyTemps[idx].as<float>();
         out.hourlyCode[i] = hourlyCodes[idx].as<int>();
+        out.hourlyPrecipProb[i] = (idx < (int)hourlyPrecip.size() && !hourlyPrecip[idx].isNull())
+                                      ? (uint8_t)hourlyPrecip[idx].as<int>()
+                                      : 0;
         out.hourlyCount++;
     }
 

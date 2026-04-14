@@ -170,7 +170,58 @@ static int drawTempC(lgfx::LovyanGFX &d, const char *prefix, float val, int deci
     return x2 + 7 + d.textWidth("C");
 }
 
-static void trimTrailingSpaces(char* text)
+static bool isRainCode(int code)
+{
+    return (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
+}
+
+static bool buildRainSummary(const WeatherData &data, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return false;
+    out[0] = '\0';
+
+    if (data.hourlyCount <= 0)
+    {
+        snprintf(out, outSize, "Sem previsao horaria");
+        return false;
+    }
+
+    for (int i = 0; i < min(data.hourlyCount, 12); i++)
+    {
+        if (!isRainCode(data.hourlyCode[i]))
+            continue;
+
+        int chance = data.hourlyPrecipProb[i];
+        if (i == 0)
+        {
+            if (chance > 0)
+                snprintf(out, outSize, "Chuva agora (%d%%)", chance);
+            else
+                snprintf(out, outSize, "Chuva agora");
+        }
+        else if (i == 1)
+        {
+            if (chance > 0)
+                snprintf(out, outSize, "Chuva na proxima hora (%d%%)", chance);
+            else
+                snprintf(out, outSize, "Chuva na proxima hora");
+        }
+        else
+        {
+            if (chance > 0)
+                snprintf(out, outSize, "Chuva em %dh (%d%%)", i, chance);
+            else
+                snprintf(out, outSize, "Chuva em %dh", i);
+        }
+        return true;
+    }
+
+    snprintf(out, outSize, "Sem chuva nas proximas horas");
+    return false;
+}
+
+static void trimTrailingSpaces(char *text)
 {
     int len = (int)strlen(text);
     while (len > 0 && text[len - 1] == ' ')
@@ -179,7 +230,7 @@ static void trimTrailingSpaces(char* text)
     }
 }
 
-static void appendEllipsisToFit(lgfx::LovyanGFX& d, char* text, int maxWidth)
+static void appendEllipsisToFit(lgfx::LovyanGFX &d, char *text, int maxWidth)
 {
     static const char kDots[] = "...";
     trimTrailingSpaces(text);
@@ -187,7 +238,8 @@ static void appendEllipsisToFit(lgfx::LovyanGFX& d, char* text, int maxWidth)
     while (text[0] && d.textWidth(text) + d.textWidth(kDots) > maxWidth)
     {
         size_t len = strlen(text);
-        if (len == 0) break;
+        if (len == 0)
+            break;
         text[len - 1] = '\0';
         trimTrailingSpaces(text);
     }
@@ -203,26 +255,31 @@ static void appendEllipsisToFit(lgfx::LovyanGFX& d, char* text, int maxWidth)
     }
 }
 
-static void drawWrappedCenteredText(lgfx::LovyanGFX& d, const char* text, int centerX,
+static void drawWrappedCenteredText(lgfx::LovyanGFX &d, const char *text, int centerX,
                                     int topY, int maxWidth, int lineHeight, int maxLines)
 {
-    if (!text || !text[0] || maxLines <= 0) return;
+    if (!text || !text[0] || maxLines <= 0)
+        return;
 
-    const char* p = text;
+    const char *p = text;
     char line[48];
 
     for (int lineIdx = 0; lineIdx < maxLines && *p; ++lineIdx)
     {
-        while (*p == ' ') ++p;
-        if (!*p) break;
+        while (*p == ' ')
+            ++p;
+        if (!*p)
+            break;
 
         line[0] = '\0';
         bool usedWord = false;
 
         while (*p)
         {
-            while (*p == ' ') ++p;
-            if (!*p) break;
+            while (*p == ' ')
+                ++p;
+            if (!*p)
+                break;
 
             char word[24];
             int wlen = 0;
@@ -234,8 +291,10 @@ static void drawWrappedCenteredText(lgfx::LovyanGFX& d, const char* text, int ce
             word[wlen] = '\0';
 
             char candidate[48];
-            if (usedWord) snprintf(candidate, sizeof(candidate), "%s %s", line, word);
-            else          snprintf(candidate, sizeof(candidate), "%s", word);
+            if (usedWord)
+                snprintf(candidate, sizeof(candidate), "%s %s", line, word);
+            else
+                snprintf(candidate, sizeof(candidate), "%s", word);
 
             if (usedWord && d.textWidth(candidate) > maxWidth)
             {
@@ -247,9 +306,11 @@ static void drawWrappedCenteredText(lgfx::LovyanGFX& d, const char* text, int ce
             usedWord = true;
             p += wlen;
 
-            if (!usedWord) break;
+            if (!usedWord)
+                break;
 
-            while (*p == ' ') ++p;
+            while (*p == ' ')
+                ++p;
 
             if (!usedWord || d.textWidth(line) > maxWidth)
             {
@@ -265,58 +326,15 @@ static void drawWrappedCenteredText(lgfx::LovyanGFX& d, const char* text, int ce
 
         if (lineIdx == maxLines - 1)
         {
-            while (*p == ' ') ++p;
-            if (*p) appendEllipsisToFit(d, line, maxWidth);
+            while (*p == ' ')
+                ++p;
+            if (*p)
+                appendEllipsisToFit(d, line, maxWidth);
         }
 
         d.setTextDatum(MC_DATUM);
         d.drawString(line, centerX, topY + lineIdx * lineHeight);
     }
-}
-
-// ── Sparkline — gráfico de tendência 24h (item #17) ──────────────────────────
-static void drawSparkline(lgfx::LovyanGFX &d, const WeatherData &data, int x, int y, int w, int h)
-{
-    if (data.trendCount < 2)
-        return;
-
-    // Encontrar min/max para escala
-    float tmin = 999, tmax = -999;
-    int start = (data.trendIdx + TREND_SAMPLES - data.trendCount) % TREND_SAMPLES;
-    for (int i = 0; i < data.trendCount; i++)
-    {
-        float t = data.trendTemp[(start + i) % TREND_SAMPLES];
-        if (t < tmin)
-            tmin = t;
-        if (t > tmax)
-            tmax = t;
-    }
-    float range = (tmax - tmin < 2.0f) ? 2.0f : (tmax - tmin);
-
-    // Desenhar linha
-    int prevPx = -1, prevPy = -1;
-    for (int i = 0; i < data.trendCount; i++)
-    {
-        float t = data.trendTemp[(start + i) % TREND_SAMPLES];
-        int px = x + i * w / (data.trendCount - 1);
-        int py = y + h - (int)((t - tmin) / range * h);
-        if (prevPx >= 0)
-        {
-            d.drawLine(prevPx, prevPy, px, py, COLOR_TEXT_ACCENT);
-        }
-        prevPx = px;
-        prevPy = py;
-    }
-
-    // Labels min/max
-    d.setFont(&fonts::Font0);
-    char lbl[8];
-    snprintf(lbl, sizeof(lbl), "%.0f", tmax);
-    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-    d.setTextDatum(TL_DATUM);
-    d.drawString(lbl, x + w + 2, y);
-    snprintf(lbl, sizeof(lbl), "%.0f", tmin);
-    d.drawString(lbl, x + w + 2, y + h - 8);
 }
 
 // ── Barras horárias + mini ícones ────────────────────────────────────────────
@@ -373,6 +391,7 @@ static void drawHourlyForecast(lgfx::LovyanGFX &d, const WeatherData &data)
 void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool fetching)
 {
     display.fillScreen(COLOR_BACKGROUND);
+    char rainSummary[40];
 
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
@@ -407,6 +426,8 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
     display.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
     drawWrappedCenteredText(display, data.description, LEFT_CX, 82, 132, 18, 2);
 
+    bool hasUpcomingRain = buildRainSummary(data, rainSummary, sizeof(rainSummary));
+
     // Separador vertical entre colunas
     display.drawFastVLine(150, 20, 90, COLOR_DIVIDER);
 
@@ -432,23 +453,31 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
         }
     }
 
-    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, RIGHT_X, 50, COLOR_TEXT_PRIMARY);
-    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 50, COLOR_TEXT_PRIMARY);
+    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, RIGHT_X, 47, COLOR_TEXT_PRIMARY);
+    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 47, COLOR_TEXT_PRIMARY);
 
     display.setFont(&fonts::FreeSans9pt7b);
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
     display.setTextColor(COLOR_HUMIDITY, COLOR_BACKGROUND);
     display.setTextDatum(TL_DATUM);
-    display.drawString(buf, RIGHT_X, 72);
+    display.drawString(buf, RIGHT_X, 69);
+
+    if (!isnan(data.apparentTemp))
+    {
+        drawTempC(display, "Sensacao: ", data.apparentTemp, 0, RIGHT_X, 91,
+                  tempColor(data.apparentTemp));
+    }
 
     // Divisor horizontal
     display.drawFastHLine(10, 110, display.width() - 20, COLOR_DIVIDER);
 
-    // Sparkline de tendência 24h (item #17)
-    if (data.trendCount >= 2)
-    {
-        drawSparkline(display, data, 14, 114, 278, 12);
-    }
+    // Resumo curto da previsão no espaço abaixo da divisória
+    display.setFont(&fonts::Font0);
+    display.setTextColor((isRainCode(data.weatherCode) || hasUpcomingRain) ? COLOR_TEXT_ACCENT
+                                                                           : COLOR_TEXT_DIM,
+                         COLOR_BACKGROUND);
+    display.setTextDatum(MC_DATUM);
+    display.drawString(rainSummary, display.width() / 2, 122);
 
     // Previsão horária com mini ícones (items #5, #20)
     drawHourlyForecast(display, data);

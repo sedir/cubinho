@@ -7,6 +7,7 @@
 // Dados do clima retornados pela API OpenMeteo
 struct WeatherData {
     float tempCurrent;
+    float apparentTemp;
     float tempPrevious;     // NaN = sem histórico
     float tempMax;
     float tempMin;
@@ -16,6 +17,7 @@ struct WeatherData {
     char  lastUpdated[6];   // "HH:MM"
     float hourlyTemp[48];   // até 48h de previsão horária
     int   hourlyCode[48];
+    uint8_t hourlyPrecipProb[48];
     int   hourlyStartHour;
     int   hourlyCount;      // quantas horas válidas (até 48)
     bool  valid;
