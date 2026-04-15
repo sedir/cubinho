@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_calendar.py — espelha o parsing iCal do firmware Portela (calendar_feed.cpp)
+check_calendar.py — espelha o parsing iCal do firmware Cubinho (calendar_feed.cpp)
 
 Uso:
     python3 tools/check_calendar.py <URL_ICS>
@@ -30,6 +30,7 @@ MAX_CALENDAR_EVENTS = 8
 # Normalização da URL (replica normalizeCalendarUrl)
 # ---------------------------------------------------------------------------
 
+
 def normalize_url(url: str) -> str:
     if url.startswith("webcal://"):
         return "https://" + url[9:]
@@ -42,13 +43,14 @@ def normalize_url(url: str) -> str:
 # Parse de linha iCal (replica parseProperty + parseDateValue + unescapeIcsText)
 # ---------------------------------------------------------------------------
 
+
 def parse_property(line: str):
     """Retorna (key, params, value) ou None."""
     colon = line.find(":")
     if colon < 0:
         return None
     before = line[:colon]
-    value = line[colon + 1:]
+    value = line[colon + 1 :]
     semi = before.find(";")
     if semi >= 0:
         key = before[:semi]
@@ -93,9 +95,9 @@ def parse_date_value(value: str, device_tz: timezone):
         return None
 
     try:
-        year  = int(value[0:4])
+        year = int(value[0:4])
         month = int(value[4:6])
-        day   = int(value[6:8])
+        day = int(value[6:8])
     except ValueError:
         return None
 
@@ -105,7 +107,7 @@ def parse_date_value(value: str, device_tz: timezone):
 
     if len(value) >= 15 and value[8] == "T":
         try:
-            hour   = int(value[9:11])
+            hour = int(value[9:11])
             minute = int(value[11:13])
             second = int(value[13:15])
         except ValueError:
@@ -138,7 +140,7 @@ def parse_tz_offset(value: str) -> int:
     """Parse iCal timezone offset: +HHMM or -HHMM → seconds."""
     if len(value) < 5:
         return 0
-    sign = -1 if value[0] == '-' else 1
+    sign = -1 if value[0] == "-" else 1
     hours = int(value[1:3])
     mins = int(value[3:5])
     return sign * (hours * 3600 + mins * 60)
@@ -147,6 +149,7 @@ def parse_tz_offset(value: str) -> int:
 # ---------------------------------------------------------------------------
 # Unfold de linhas iCal (RFC 5545 §3.1)
 # ---------------------------------------------------------------------------
+
 
 def unfold_lines(text: str) -> list[str]:
     """Replica o mecanismo de pendingLine + continuação do firmware."""
@@ -171,14 +174,27 @@ def unfold_lines(text: str) -> list[str]:
 # Filtro de "overlaps today" (replica maybeStoreEvent)
 # ---------------------------------------------------------------------------
 
-def overlaps_today(start_dt, end_dt, all_day, today_start, tomorrow_start,
-                   start_key, end_key, today_key):
+
+def overlaps_today(
+    start_dt,
+    end_dt,
+    all_day,
+    today_start,
+    tomorrow_start,
+    start_key,
+    end_key,
+    today_key,
+):
     """Replica a lógica de maybeStoreEvent."""
     if end_dt is None:
-        end_dt = start_dt + timedelta(days=1) if all_day else start_dt + timedelta(minutes=1)
+        end_dt = (
+            start_dt + timedelta(days=1) if all_day else start_dt + timedelta(minutes=1)
+        )
 
     if end_dt <= start_dt:
-        end_dt = start_dt + timedelta(days=1) if all_day else start_dt + timedelta(minutes=1)
+        end_dt = (
+            start_dt + timedelta(days=1) if all_day else start_dt + timedelta(minutes=1)
+        )
 
     # Verificação por timestamp
     overlap_ts = (start_dt < tomorrow_start) and (end_dt > today_start)
@@ -189,13 +205,15 @@ def overlaps_today(start_dt, end_dt, all_day, today_start, tomorrow_start,
         if all_day:
             if end_key <= 0:
                 # Sem DTEND — evento de dia único (RFC 5545 §3.6.1)
-                overlap_ts = (start_key == today_key)
+                overlap_ts = start_key == today_key
             else:
                 overlap_ts = (start_key <= today_key) and (eff_end_key > today_key)
         else:
-            overlap_ts = (start_key == today_key or
-                          eff_end_key == today_key or
-                          (start_key < today_key and eff_end_key > today_key))
+            overlap_ts = (
+                start_key == today_key
+                or eff_end_key == today_key
+                or (start_key < today_key and eff_end_key > today_key)
+            )
 
     return overlap_ts, end_dt
 
@@ -203,6 +221,7 @@ def overlaps_today(start_dt, end_dt, all_day, today_start, tomorrow_start,
 # ---------------------------------------------------------------------------
 # Build summary (replica calendarBuildTodaySummary)
 # ---------------------------------------------------------------------------
+
 
 def build_today_summary(events: list, now_dt: datetime) -> str | None:
     if not events:
@@ -217,7 +236,7 @@ def build_today_summary(events: list, now_dt: datetime) -> str | None:
             break
 
     primary = events[primary_idx]
-    extra = len(events) - 1   # total - 1 (firmware usa _todayTotalCount - 1)
+    extra = len(events) - 1  # total - 1 (firmware usa _todayTotalCount - 1)
 
     if primary["all_day"]:
         if extra > 0:
@@ -234,16 +253,22 @@ def build_today_summary(events: list, now_dt: datetime) -> str | None:
 # Parser principal (replica calendarFetchToday)
 # ---------------------------------------------------------------------------
 
-def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: bool = True):
-    today_start = datetime(sim_date.year, sim_date.month, sim_date.day,
-                           0, 0, 0, tzinfo=device_tz)
+
+def parse_calendar(
+    payload: str, device_tz: timezone, sim_date: date, verbose: bool = True
+):
+    today_start = datetime(
+        sim_date.year, sim_date.month, sim_date.day, 0, 0, 0, tzinfo=device_tz
+    )
     tomorrow_start = today_start + timedelta(days=1)
     today_key = sim_date.year * 10000 + sim_date.month * 100 + sim_date.day
 
     if verbose:
         print(f"\n{'='*60}")
         print(f"  Data simulada : {sim_date}  (hoje_key={today_key})")
-        print(f"  Fuso dispositivo: UTC{int(device_tz.utcoffset(None).total_seconds())//3600:+d}")
+        print(
+            f"  Fuso dispositivo: UTC{int(device_tz.utcoffset(None).total_seconds())//3600:+d}"
+        )
         print(f"  today_start   : {today_start.isoformat()}")
         print(f"  tomorrow_start: {tomorrow_start.isoformat()}")
         print(f"{'='*60}\n")
@@ -285,7 +310,7 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
         if not in_event or not has_start:
             return
         if verbose:
-            print(f"  END:VEVENT  \"{title}\"")
+            print(f'  END:VEVENT  "{title}"')
             print(f"    DTSTART raw={start_raw!r} params={start_params!r}")
             print(f"            → {start_dt}  allDay={all_day}")
             if has_end:
@@ -296,13 +321,20 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
                 eff = timezone(timedelta(seconds=tz_off))
                 print(f"    ✓ TZID={tzid_start!r} → offset={tz_off}s (via VTIMEZONE)")
             elif tzid_start:
-                print(f"    ⚠ TZID={tzid_start!r} não encontrado em VTIMEZONE"
-                      f" — usando fuso do dispositivo {device_tz}")
+                print(
+                    f"    ⚠ TZID={tzid_start!r} não encontrado em VTIMEZONE"
+                    f" — usando fuso do dispositivo {device_tz}"
+                )
 
         ok, end_adj = overlaps_today(
-            start_dt, end_dt, all_day,
-            today_start, tomorrow_start,
-            start_key, end_key, today_key
+            start_dt,
+            end_dt,
+            all_day,
+            today_start,
+            tomorrow_start,
+            start_key,
+            end_key,
+            today_key,
         )
 
         if verbose:
@@ -317,12 +349,14 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
         if ok:
             events_total += 1
             if len(events_today) < MAX_CALENDAR_EVENTS:
-                events_today.append({
-                    "title": title,
-                    "start_dt": start_dt,
-                    "end_dt": end_adj,
-                    "all_day": all_day,
-                })
+                events_today.append(
+                    {
+                        "title": title,
+                        "start_dt": start_dt,
+                        "end_dt": end_adj,
+                        "all_day": all_day,
+                    }
+                )
 
     for line in lines:
         parsed = parse_property(line)
@@ -341,8 +375,10 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
             if tz_id and has_tz_std:
                 vtimezones[tz_id] = tz_std_offset
                 if verbose:
-                    print(f"  VTIMEZONE: {tz_id!r} → offset={tz_std_offset}s "
-                          f"(UTC{tz_std_offset//3600:+d})")
+                    print(
+                        f"  VTIMEZONE: {tz_id!r} → offset={tz_std_offset}s "
+                        f"(UTC{tz_std_offset//3600:+d})"
+                    )
             in_timezone = False
             in_tz_standard = False
 
@@ -432,15 +468,22 @@ def parse_calendar(payload: str, device_tz: timezone, sim_date: date, verbose: b
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("url", help="URL do feed iCal (.ics / webcal://)")
     parser.add_argument("--date", help="Simular 'hoje' como YYYY-MM-DD (padrão: hoje)")
-    parser.add_argument("--tz-offset", type=int, default=32400,
-                        help="Offset UTC do dispositivo em segundos (padrão: 32400 = UTC+9)")
-    parser.add_argument("--raw", action="store_true",
-                        help="Exibir payload bruto recebido")
+    parser.add_argument(
+        "--tz-offset",
+        type=int,
+        default=32400,
+        help="Offset UTC do dispositivo em segundos (padrão: 32400 = UTC+9)",
+    )
+    parser.add_argument(
+        "--raw", action="store_true", help="Exibir payload bruto recebido"
+    )
     args = parser.parse_args()
 
     url = normalize_url(args.url)
@@ -460,11 +503,14 @@ def main():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Portela/1.0",
-            "Cache-Control": "no-cache, no-store",
-            "Pragma": "no-cache",
-        })
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Cubinho/1.0",
+                "Cache-Control": "no-cache, no-store",
+                "Pragma": "no-cache",
+            },
+        )
         with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
             content_length = resp.headers.get("Content-Length")
             raw = resp.read()
@@ -481,7 +527,9 @@ def main():
         else:
             print(f"  Content-Length: {content_length} bytes (completo)")
     else:
-        print(f"  Content-Length: ausente (chunked transfer — tamanho só verificável pelo parser)")
+        print(
+            f"  Content-Length: ausente (chunked transfer — tamanho só verificável pelo parser)"
+        )
 
     if args.raw:
         print("\n--- PAYLOAD BRUTO ---")
@@ -496,11 +544,15 @@ def main():
         print(f"  Integridade    : OK (END:VCALENDAR presente)")
 
     # Parsear
-    events_today, events_total = parse_calendar(payload, device_tz, sim_date, verbose=True)
+    events_today, events_total = parse_calendar(
+        payload, device_tz, sim_date, verbose=True
+    )
 
     # Resultado final
     print("=" * 60)
-    print(f"  Eventos aceitos hoje : {len(events_today)} (max exibidos: {MAX_CALENDAR_EVENTS})")
+    print(
+        f"  Eventos aceitos hoje : {len(events_today)} (max exibidos: {MAX_CALENDAR_EVENTS})"
+    )
     print(f"  Total contabilizado  : {events_total}")
 
     now_dt = datetime.now(device_tz)
@@ -508,7 +560,7 @@ def main():
 
     print()
     if summary:
-        print(f"  >>> Texto na Home: \"{summary}\"")
+        print(f'  >>> Texto na Home: "{summary}"')
     else:
         print(f"  >>> Texto na Home: (vazio — nenhum evento hoje)")
         print(f"      Fallback para events.json do SD card.")

@@ -28,3 +28,4 @@ void wifiGetCalendarConfigAddress(char* out, size_t outSize);
 // Credenciais armazenadas em NVS (item #23)
 bool wifiHasStoredCredentials();
 void wifiClearStoredCredentials();
+void wifiSaveCredentials(const char* ssid, const char* pass);  // salva sem reiniciar (para QR)

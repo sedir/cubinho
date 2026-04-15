@@ -20,6 +20,7 @@
 #include "calendar_feed.h"
 #include "bg_network.h"
 #include "chime_wav.h"
+#include "qr_scanner.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
@@ -445,9 +446,28 @@ void loop() {
         lastCalendarConfigMode = calendarConfigMode;
     }
 
+    // ── Toque ────
+    auto touch = M5.Touch.getDetail();
+
+    // ── QR scanner ───────────────────────────────────────────────────────────
+    if (qrScannerIsActive()) {
+        if (qrScannerUpdate(*fb, touch.wasReleased())) {
+            qrScannerEnd();
+            needsRedraw = true;
+        }
+        // NÃO chamar pushFrame(): qrScannerUpdate desenha direto em CoreS3.Display
+        delay(50);
+        return;
+    }
+
     // ── Portal mode: tela de configuração WiFi ───────────────────────────────
     if (portalMode) {
         static uint32_t lastPortalDraw = 0;
+        if (touch.wasReleased()) {
+            qrScannerBegin(QR_SCAN_WIFI);
+            lastPortalDraw = 0;
+            return;
+        }
         if (millis() - lastPortalDraw > 2000) {
             lastPortalDraw = millis();
             drawWifiPortalScreen(*fb);
@@ -456,9 +476,6 @@ void loop() {
         delay(50);
         return;
     }
-
-    // ── Toque ────
-    auto touch = M5.Touch.getDetail();
 
     if (touch.wasPressed()) {
         touchStartedInDim = powerIsDim();

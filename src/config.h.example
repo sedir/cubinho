@@ -67,14 +67,14 @@
 
 // OTA — atualização sem fio (ativo apenas quando WiFi mantido por Telnet)
 #define OTA_ENABLED  true
-#define OTA_HOSTNAME "portela"
+#define OTA_HOSTNAME "cubinho"
 
 // Timers de cozinha — número máximo de timers simultâneos
 #define MAX_TIMERS  3
 
 // Portal cativo WiFi — entra em modo AP para configuração após N falhas
 #define WIFI_PORTAL_FAIL_THRESHOLD  3
-#define WIFI_PORTAL_AP_NAME         "Portela-Setup"
+#define WIFI_PORTAL_AP_NAME         "Cubinho-Setup"
 
 // Debug — log verboso do parsing iCal (desative em produção)
 #define CALENDAR_DEBUG  false

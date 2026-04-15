@@ -6,6 +6,7 @@
 #include "wifi_manager.h"
 #include "runtime_config.h"
 #include "screen_home.h"
+#include "qr_scanner.h"
 #include <M5Unified.h>
 
 // ── Layout interno ───────────────────────────────────────────────────────────
@@ -26,25 +27,27 @@ struct VEntry {
 
 // Lista virtual completa (ordem fixa)
 static const VEntry kEntries[] = {
-    { EKIND_CATEGORY, "Conexao",         nullptr                         },  // 0
-    { EKIND_TOGGLE,   "WiFi permanente", "Mantem OTA e Telnet ativos"   },  // 1
-    { EKIND_CYCLE,    "Intervalo clima", "Busca novos dados automaticamente" },  // 2
-    { EKIND_ACTION,   "Alterar WiFi",    "Apaga credenciais e abre portal" },  // 3
-    { EKIND_ACTION,   "Configurar iCal", "Abre pagina local temporaria"  },  // 4
-    { EKIND_CATEGORY, "Display",         nullptr                         },  // 5
-    { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal" },  // 6
-    { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho" },  // 7
-    { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"      },  // 8
-    { EKIND_CATEGORY, "Timers",          nullptr                         },  // 9
-    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial" },  // 10
-    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial" },  // 11
-    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial" },  // 12
-    { EKIND_CATEGORY, "Energia",         nullptr                         },  // 13
-    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"    },  // 14
-    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"        },  // 15
-    { EKIND_CATEGORY, "Sistema",         nullptr                         },  // 16
-    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"     },  // 17
-    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"    },  // 18
+    { EKIND_CATEGORY, "Conexao",         nullptr                               },  // 0
+    { EKIND_TOGGLE,   "WiFi permanente", "Mantem OTA e Telnet ativos"         },  // 1
+    { EKIND_CYCLE,    "Intervalo clima", "Busca novos dados automaticamente"  },  // 2
+    { EKIND_ACTION,   "Alterar WiFi",    "Apaga credenciais e abre portal"    },  // 3
+    { EKIND_ACTION,   "Configurar iCal", "Abre pagina local temporaria"       },  // 4
+    { EKIND_ACTION,   "QR: config. WiFi","Scan QR WIFI:T:WPA;S:rede;P:senha;;"}, // 5
+    { EKIND_ACTION,   "QR: config. iCal","Scan QR com URL do feed iCal"       },  // 6
+    { EKIND_CATEGORY, "Display",         nullptr                               },  // 7
+    { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal"    },  // 8
+    { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho"     },  // 9
+    { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"           },  // 10
+    { EKIND_CATEGORY, "Timers",          nullptr                               },  // 11
+    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial"      },  // 12
+    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial"      },  // 13
+    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial"      },  // 14
+    { EKIND_CATEGORY, "Energia",         nullptr                               },  // 15
+    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"         },  // 16
+    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"             },  // 17
+    { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 18
+    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 19
+    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 20
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -54,16 +57,18 @@ enum ItemIdx {
     IDX_WEATHER_INT   = 2,
     IDX_WIFI_CHANGE   = 3,
     IDX_CALENDAR_CFG  = 4,
-    IDX_BRIGHTNESS    = 6,
-    IDX_DIM_TIMEOUT   = 7,
-    IDX_AUTO_BRIGHT   = 8,
-    IDX_TIMER_LABEL_1 = 10,
-    IDX_TIMER_LABEL_2 = 11,
-    IDX_TIMER_LABEL_3 = 12,
-    IDX_DEEP_SLEEP    = 14,
-    IDX_ACCEL_WAKE    = 15,
-    IDX_RESTART       = 17,
-    IDX_FACTORY_RESET = 18,
+    IDX_QR_WIFI       = 5,
+    IDX_QR_ICAL       = 6,
+    IDX_BRIGHTNESS    = 8,
+    IDX_DIM_TIMEOUT   = 9,
+    IDX_AUTO_BRIGHT   = 10,
+    IDX_TIMER_LABEL_1 = 12,
+    IDX_TIMER_LABEL_2 = 13,
+    IDX_TIMER_LABEL_3 = 14,
+    IDX_DEEP_SLEEP    = 16,
+    IDX_ACCEL_WAKE    = 17,
+    IDX_RESTART       = 19,
+    IDX_FACTORY_RESET = 20,
 };
 
 // Opções de ciclo
@@ -490,6 +495,12 @@ bool screenSettingsHandleLongPress(int tapX, int tapY, int scrollOffset) {
             break;
         case IDX_CALENDAR_CFG:
             return wifiStartCalendarConfig();
+        case IDX_QR_WIFI:
+            qrScannerBegin(QR_SCAN_WIFI);
+            return false;
+        case IDX_QR_ICAL:
+            qrScannerBegin(QR_SCAN_ICAL);
+            return false;
         case IDX_RESTART:
             g_confirmAction = CONFIRM_RESTART;
             break;
@@ -512,24 +523,29 @@ void drawWifiPortalScreen(lgfx::LovyanGFX& d) {
     d.setFont(&fonts::FreeSansBold18pt7b);
     d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
     d.setTextDatum(MC_DATUM);
-    d.drawString("Configure o WiFi", d.width() / 2, 50);
+    d.drawString("Configure o WiFi", d.width() / 2, 40);
 
     d.setFont(&fonts::FreeSans9pt7b);
     d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-    d.drawString("Conecte ao celular:", d.width() / 2, 95);
+    d.drawString("Pelo celular, conecte em:", d.width() / 2, 75);
 
     d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-    d.drawString(WIFI_PORTAL_AP_NAME, d.width() / 2, 118);
+    d.drawString(WIFI_PORTAL_AP_NAME, d.width() / 2, 98);
 
     d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-    d.drawString("e acesse no navegador:", d.width() / 2, 145);
+    d.drawString("e acesse no navegador:", d.width() / 2, 125);
 
     d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
-    d.drawString("192.168.4.1", d.width() / 2, 168);
+    d.drawString("192.168.4.1", d.width() / 2, 148);
+
+    // Botão de QR
+    d.fillRoundRect(d.width() / 2 - 110, 175, 220, 36, 8, 0x2945); // Background similar to buttons
+    d.setTextColor(COLOR_TEXT_PRIMARY, 0x2945);
+    d.drawString("TOQUE PARA LER QR", d.width() / 2, 193);
 
     d.setFont(&fonts::Font0);
     d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-    d.drawString("Apos salvar, reinicia automaticamente.", d.width() / 2, 210);
+    d.drawString("Apos salvar, o dispositivo reiniciara.", d.width() / 2, 226);
 }
 
 void drawCalendarConfigScreen(lgfx::LovyanGFX& d) {

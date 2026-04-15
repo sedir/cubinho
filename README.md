@@ -1,4 +1,4 @@
-# M5 CoreS3 — Portela
+# M5 CoreS3 — Cubinho
 
 Firmware para M5Stack CoreS3 fixado na porta da geladeira. Exibe em alternância via swipe ou toque na tela:
 
@@ -45,7 +45,7 @@ Se quiser exibir eventos do seu calendario na home, voce pode:
 
 O servidor local do calendario fica ativo apenas enquanto esse modo estiver aberto. O firmware busca os eventos do dia durante a atualizacao de rede e prioriza esse resumo na tela inicial.
 
-As credenciais WiFi nao ficam mais no firmware: no primeiro boot, ou apos limpar as credenciais, o dispositivo abre o AP `Portela-Setup` para configuracao via portal cativo.
+As credenciais WiFi nao ficam mais no firmware: no primeiro boot, ou apos limpar as credenciais, o dispositivo abre o AP `Cubinho-Setup` para configuracao via portal cativo.
 
 ### 3. Compile e envie para o CoreS3
 
@@ -118,8 +118,8 @@ src/
 - Orientação automática via acelerômetro (rotações landscape 1 e 3)
 
 ### Conectividade
-- Portal cativo WiFi: após 3 falhas consecutivas, abre AP "Portela-Setup" para reconfiguraçção
-- OTA via ArduinoOTA (hostname "portela") quando keep-alive ativo
+- Portal cativo WiFi: após 3 falhas consecutivas, abre AP "Cubinho-Setup" para reconfiguraçção
+- OTA via ArduinoOTA (hostname "cubinho") quando keep-alive ativo
 - Log via Telnet (porta 23) e SD card quando disponível
 
 ---

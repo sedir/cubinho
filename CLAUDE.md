@@ -1,4 +1,4 @@
-# M5 CoreS3 — Portela
+# M5 CoreS3 — Cubinho
 
 ## Visão geral do projeto
 
@@ -129,14 +129,14 @@ src/
 
 // OTA
 #define OTA_ENABLED   true
-#define OTA_HOSTNAME  "portela"
+#define OTA_HOSTNAME  "cubinho"
 
 // Timers de cozinha simultâneos
 #define MAX_TIMERS  3
 
 // Portal cativo — entra em AP mode após N falhas consecutivas de WiFi
 #define WIFI_PORTAL_FAIL_THRESHOLD  3
-#define WIFI_PORTAL_AP_NAME         "Portela-Setup"
+#define WIFI_PORTAL_AP_NAME         "Cubinho-Setup"
 ```
 
 ---
@@ -386,14 +386,14 @@ Log estruturado com timestamp, nível e tag:
 
 ## OTA (`ota_manager`)
 
-ArduinoOTA com hostname `OTA_HOSTNAME` ("portela"). Ativo apenas quando WiFi keep-alive habilitado. `otaUpdate()` chamado no loop principal.
+ArduinoOTA com hostname `OTA_HOSTNAME` ("cubinho"). Ativo apenas quando WiFi keep-alive habilitado. `otaUpdate()` chamado no loop principal.
 
 ---
 
 ## Portal WiFi cativo (`wifi_manager`)
 
 Após `WIFI_PORTAL_FAIL_THRESHOLD` falhas consecutivas de conexão:
-- Abre AP com SSID `WIFI_PORTAL_AP_NAME` ("Portela-Setup")
+- Abre AP com SSID `WIFI_PORTAL_AP_NAME` ("Cubinho-Setup")
 - Exibe `drawWifiPortalScreen()` em fullscreen
 - DNS e HTTP servidos por `wifiPortalUpdate()` no loop
 - Credenciais salvas em NVS: `wifiHasStoredCredentials()` / `wifiClearStoredCredentials()`
@@ -443,7 +443,7 @@ Helpers inline desenhados no cabeçalho e rodapé das telas:
 | Situação | Comportamento |
 |---|---|
 | WiFi não conecta (< threshold) | "Sem conexao" na tela, tenta no próximo ciclo de 30 min |
-| WiFi não conecta (≥ threshold) | Entra em modo portal cativo (AP "Portela-Setup") |
+| WiFi não conecta (≥ threshold) | Entra em modo portal cativo (AP "Cubinho-Setup") |
 | API do clima falha | Mantém último dado + timestamp da última leitura |
 | NTP não sincroniza | Exibe `--:--:--` |
 | `createSprite()` falha | Fallback para display direto (com flickering), LOG_E |
