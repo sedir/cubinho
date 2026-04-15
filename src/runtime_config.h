@@ -12,6 +12,7 @@ struct RuntimeConfig {
     bool  accelWake;            // Acorda do dim ao detectar movimento
     int   timerLabelPreset[MAX_TIMERS];  // Nome escolhido para cada slot
     bool  voiceEnabled;         // Comandos por voz via microfone embutido
+    bool  nightMode;            // Modo noturno: brilho mínimo + sem auto-brilho
 };
 
 // Carrega configuração do NVS (usa defaults de config.h se namespace vazio).

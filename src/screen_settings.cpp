@@ -39,17 +39,18 @@ static const VEntry kEntries[] = {
     { EKIND_CYCLE,    "Brilho ativo",    "Brilho usado em operacao normal"    },  // 8
     { EKIND_CYCLE,    "Tempo p/ dim",    "Inatividade ate reduzir brilho"     },  // 9
     { EKIND_TOGGLE,   "Auto-brilho",     "Ajusta pela luz ambiente"           },  // 10
-    { EKIND_CATEGORY, "Timers",          nullptr                               },  // 11
-    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial"      },  // 12
-    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial"      },  // 13
-    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial"      },  // 14
-    { EKIND_CATEGORY, "Energia",         nullptr                               },  // 15
-    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"         },  // 16
-    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"             },  // 17
-    { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 18
-    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 19
-    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 20
-    { EKIND_TOGGLE,   "Cmd por voz",     "Press longa no header p/ ouvir"    },  // 21
+    { EKIND_TOGGLE,   "Modo noturno",    "Brilho minimo, sem auto-brilho"    },  // 11
+    { EKIND_CATEGORY, "Timers",          nullptr                               },  // 12
+    { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial"      },  // 13
+    { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial"      },  // 14
+    { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial"      },  // 15
+    { EKIND_CATEGORY, "Energia",         nullptr                               },  // 16
+    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"         },  // 17
+    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"             },  // 18
+    { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 19
+    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 20
+    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 21
+    { EKIND_TOGGLE,   "Cmd por voz",     "Press longa no header p/ ouvir"    },  // 22
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -64,14 +65,15 @@ enum ItemIdx {
     IDX_BRIGHTNESS    = 8,
     IDX_DIM_TIMEOUT   = 9,
     IDX_AUTO_BRIGHT   = 10,
-    IDX_TIMER_LABEL_1 = 12,
-    IDX_TIMER_LABEL_2 = 13,
-    IDX_TIMER_LABEL_3 = 14,
-    IDX_DEEP_SLEEP    = 16,
-    IDX_ACCEL_WAKE    = 17,
-    IDX_RESTART       = 19,
-    IDX_FACTORY_RESET = 20,
-    IDX_VOICE         = 21,
+    IDX_NIGHT_MODE    = 11,
+    IDX_TIMER_LABEL_1 = 13,
+    IDX_TIMER_LABEL_2 = 14,
+    IDX_TIMER_LABEL_3 = 15,
+    IDX_DEEP_SLEEP    = 17,
+    IDX_ACCEL_WAKE    = 18,
+    IDX_RESTART       = 20,
+    IDX_FACTORY_RESET = 21,
+    IDX_VOICE         = 22,
 };
 
 // Opções de ciclo
@@ -123,6 +125,7 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
     switch (entryIdx) {
         case IDX_KEEP_ALIVE:  return cfg.wifiKeepAlive  ? "ON" : "OFF";
         case IDX_AUTO_BRIGHT: return cfg.autoBrightness ? "ON" : "OFF";
+        case IDX_NIGHT_MODE:  return cfg.nightMode      ? "ON" : "OFF";
         case IDX_ACCEL_WAKE:  return cfg.accelWake      ? "ON" : "OFF";
         case IDX_VOICE:       return cfg.voiceEnabled   ? "ON" : "OFF";
         case IDX_TIMER_LABEL_1:
@@ -444,6 +447,9 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
             break;
         case IDX_AUTO_BRIGHT:
             cfg.autoBrightness = !cfg.autoBrightness;
+            break;
+        case IDX_NIGHT_MODE:
+            cfg.nightMode = !cfg.nightMode;
             break;
         case IDX_ACCEL_WAKE:
             cfg.accelWake = !cfg.accelWake;

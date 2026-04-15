@@ -23,6 +23,7 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     cfg.deepSleepTimeoutMin = _prefs.getInt ("sleepMin",   (int)(DEEP_SLEEP_TIMEOUT_MS / 60000UL));
     cfg.accelWake           = _prefs.getBool("accelWake",  ACCEL_WAKE_ENABLED);
     cfg.voiceEnabled        = _prefs.getBool("voiceEn",    false);
+    cfg.nightMode           = _prefs.getBool("nightMode",  false);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
@@ -43,6 +44,7 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.putInt ("sleepMin",   cfg.deepSleepTimeoutMin);
     _prefs.putBool("accelWake",  cfg.accelWake);
     _prefs.putBool("voiceEn",    cfg.voiceEnabled);
+    _prefs.putBool("nightMode",  cfg.nightMode);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
@@ -51,12 +53,21 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.end();
 }
 
+#ifndef BRIGHTNESS_NIGHT
+#define BRIGHTNESS_NIGHT 15
+#endif
+
 void runtimeConfigApply(const RuntimeConfig& cfg) {
     wifiSetKeepAlive(cfg.wifiKeepAlive);
     wifiSetUpdateInterval((uint32_t)cfg.weatherIntervalMin * 60000UL);
-    powerSetBrightnessActive(cfg.brightnessActive);
+    if (cfg.nightMode) {
+        powerSetAutoBrightness(false);
+        powerSetBrightnessActive(BRIGHTNESS_NIGHT);
+    } else {
+        powerSetBrightnessActive(cfg.brightnessActive);
+        powerSetAutoBrightness(cfg.autoBrightness);
+    }
     powerSetDimTimeout((uint32_t)cfg.dimTimeoutSec * 1000UL);
-    powerSetAutoBrightness(cfg.autoBrightness);
     uint32_t sleepMs = (cfg.deepSleepTimeoutMin > 0)
                      ? (uint32_t)cfg.deepSleepTimeoutMin * 60000UL
                      : 0;
