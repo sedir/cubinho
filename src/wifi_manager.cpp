@@ -66,7 +66,18 @@ static void saveCredentials(const String &ssid, const String &pass)
 bool wifiHasStoredCredentials()
 {
     loadCredentials();
-    return _nvsSSID.length() > 0;
+    // Valida limites do protocolo 802.11: SSID 1–32 bytes, senha 0–63 bytes.
+    // NVS corrompido pode retornar strings fora desses limites.
+    int ssidLen = (int)_nvsSSID.length();
+    int passLen = (int)_nvsPass.length();
+    if (ssidLen < 1 || ssidLen > 32 || passLen > 63) {
+        if (ssidLen != 0) {
+            LOG_W("wifi", "Credenciais invalidas no NVS (ssid=%d pass=%d bytes) — ignoradas",
+                  ssidLen, passLen);
+        }
+        return false;
+    }
+    return true;
 }
 
 void wifiClearStoredCredentials()

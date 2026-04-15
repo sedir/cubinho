@@ -201,6 +201,7 @@ static void animateTransition(int fromScreen, int toScreen, int direction) {
     const int h        = M5.Display.height();
 
     for (int i = 1; i <= FRAMES; i++) {
+        M5.update();  // processa eventos de toque durante a transição (evita drops)
         float t    = (float)i / (float)FRAMES;
         float inv  = 1.0f - t;
         float ease = 1.0f - (inv * inv * inv);

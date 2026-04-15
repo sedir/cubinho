@@ -243,6 +243,7 @@ static const int TIMER_SUMMARY_Y = 198;
 static bool keyboardActive = false;
 static int  keyboardSlot   = 0;
 static char keyboardBuf[16] = "";
+static bool keyboardShift  = true;  // true = próxima letra maiúscula
 
 static const char* KB_ROW1 = "QWERTYUIOP";  // 10 teclas
 static const char* KB_ROW2 = "ASDFGHJKL";   //  9 teclas
@@ -285,14 +286,24 @@ static void drawKeyboardOverlay(lgfx::LovyanGFX& d) {
     d.setTextDatum(ML_DATUM);
     d.drawString(slotLabel, 8, KB_INPUT_H / 2);
 
-    // Texto digitado + cursor piscante
-    char dispBuf[18];
-    strlcpy(dispBuf, keyboardBuf, sizeof(dispBuf));
-    if ((millis() / 500) % 2 == 0 && strlen(dispBuf) < 15)
-        strncat(dispBuf, "_", sizeof(dispBuf) - strlen(dispBuf) - 1);
-    d.setTextColor(TFT_WHITE, 0x1082);
-    d.setTextDatum(ML_DATUM);
-    d.drawString(dispBuf, 36, KB_INPUT_H / 2);
+    // Texto digitado + cursor em bloco piscante
+    // Font0: largura fixa de 6px por caractere, altura ~8px
+    {
+        int textLen = (int)strlen(keyboardBuf);
+        int textX   = 36;
+        int textY   = KB_INPUT_H / 2;
+        bool cursorOn = (millis() / 500) % 2 == 0;
+
+        d.setTextColor(TFT_WHITE, 0x1082);
+        d.setTextDatum(ML_DATUM);
+        d.drawString(keyboardBuf, textX, textY);
+
+        // Cursor em bloco laranja no final do texto (visível em fundo escuro)
+        if (cursorOn && textLen < 15) {
+            int cx = textX + textLen * 6;
+            d.fillRect(cx, (KB_INPUT_H - 14) / 2, 6, 14, COLOR_TEXT_ACCENT);
+        }
+    }
 
     // Botão cancelar (×)
     d.fillRoundRect(284, 6, 30, 30, 4, 0x4208);
@@ -303,25 +314,31 @@ static void drawKeyboardOverlay(lgfx::LovyanGFX& d) {
     // Linha 1: QWERTYUIOP
     for (int i = 0; i < 10; i++) {
         int x = KB_ROW1_X + i * (KB_KEY_W + KB_GAP);
-        char label[2] = { KB_ROW1[i], 0 };
+        char label[2] = { keyboardShift ? KB_ROW1[i] : (char)tolower(KB_ROW1[i]), 0 };
         drawKbKey(d, x, KB_ROW1_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
     }
     // Linha 2: ASDFGHJKL
     for (int i = 0; i < 9; i++) {
         int x = KB_ROW2_X + i * (KB_KEY_W + KB_GAP);
-        char label[2] = { KB_ROW2[i], 0 };
+        char label[2] = { keyboardShift ? KB_ROW2[i] : (char)tolower(KB_ROW2[i]), 0 };
         drawKbKey(d, x, KB_ROW2_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
     }
-    // Linha 3: ZXCVBNM + DEL
-    static const int KB_DEL_W   = KB_KEY_W + 14;  // 42px
-    static const int KB_ROW3_TW = 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + KB_DEL_W;
-    static const int KB_ROW3_X  = (320 - KB_ROW3_TW) / 2;
+    // Linha 3: ^ (SHIFT) + ZXCVBNM + DEL
+    // Layout: 42 + 3 + 7×28 + 6×3 + 3 + 42 = 304px → margem 8px
+    static const int KB_SHIFT_W  = KB_KEY_W + 14;  // 42px
+    static const int KB_DEL_W    = KB_KEY_W + 14;  // 42px
+    static const int KB_ROW3_TW  = KB_SHIFT_W + KB_GAP + 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + KB_DEL_W;
+    static const int KB_ROW3_X   = (320 - KB_ROW3_TW) / 2;
+    // Botão Shift: branco quando ativo, cinza escuro quando inativo
+    uint16_t shiftBg = keyboardShift ? 0xFFFF : 0x2124;
+    uint16_t shiftFg = keyboardShift ? COLOR_BACKGROUND : TFT_WHITE;
+    drawKbKey(d, KB_ROW3_X, KB_ROW3_Y, KB_SHIFT_W, KB_KEY_H, "^", shiftBg, shiftFg);
     for (int i = 0; i < 7; i++) {
-        int x = KB_ROW3_X + i * (KB_KEY_W + KB_GAP);
-        char label[2] = { KB_ROW3[i], 0 };
+        int x = KB_ROW3_X + KB_SHIFT_W + KB_GAP + i * (KB_KEY_W + KB_GAP);
+        char label[2] = { keyboardShift ? KB_ROW3[i] : (char)tolower(KB_ROW3[i]), 0 };
         drawKbKey(d, x, KB_ROW3_Y, KB_KEY_W, KB_KEY_H, label, 0x2124, TFT_WHITE);
     }
-    int delX = KB_ROW3_X + 7 * (KB_KEY_W + KB_GAP);
+    int delX = KB_ROW3_X + KB_SHIFT_W + KB_GAP + 7 * (KB_KEY_W + KB_GAP);
     drawKbKey(d, delX, KB_ROW3_Y, KB_DEL_W, KB_KEY_H, "<", 0x3186, TFT_WHITE);
 
     // Linha 4: ESPAÇO + OK
@@ -336,7 +353,8 @@ static void drawKeyboardOverlay(lgfx::LovyanGFX& d) {
 bool screenHomeIsKeyboardActive() { return keyboardActive; }
 
 void screenHomeOpenKeyboard(int slot) {
-    keyboardSlot = slot;
+    keyboardSlot  = slot;
+    keyboardShift = true;  // auto-shift: primeira letra em maiúscula
     strlcpy(keyboardBuf, screenHomeGetTimerLabel(slot), sizeof(keyboardBuf));
     keyboardActive = true;
     LOG_I("timer", "Teclado aberto para T%d", slot + 1);
@@ -356,8 +374,9 @@ void screenHomeKeyboardHandleTouch(int x, int y) {
         for (int i = 0; i < 10; i++) {
             int kx = KB_ROW1_X + i * (KB_KEY_W + KB_GAP);
             if (x >= kx && x < kx + KB_KEY_W) {
-                char ch[2] = { KB_ROW1[i], 0 };
+                char ch[2] = { keyboardShift ? KB_ROW1[i] : (char)tolower(KB_ROW1[i]), 0 };
                 if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                keyboardShift = false;  // auto-revert: letras seguintes em minúscula
                 M5.Speaker.tone(880, 12); return;
             }
         }
@@ -367,28 +386,39 @@ void screenHomeKeyboardHandleTouch(int x, int y) {
         for (int i = 0; i < 9; i++) {
             int kx = KB_ROW2_X + i * (KB_KEY_W + KB_GAP);
             if (x >= kx && x < kx + KB_KEY_W) {
-                char ch[2] = { KB_ROW2[i], 0 };
+                char ch[2] = { keyboardShift ? KB_ROW2[i] : (char)tolower(KB_ROW2[i]), 0 };
                 if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                keyboardShift = false;
                 M5.Speaker.tone(880, 12); return;
             }
         }
     }
-    // Linha 3
+    // Linha 3: ^ (SHIFT) + ZXCVBNM + DEL
     if (y >= KB_ROW3_Y && y < KB_ROW3_Y + KB_KEY_H) {
-        const int delW  = KB_KEY_W + 14;
-        const int r3tw  = 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + delW;
-        const int r3x   = (320 - r3tw) / 2;
-        const int delX  = r3x + 7 * (KB_KEY_W + KB_GAP);
+        const int shiftW   = KB_KEY_W + 14;  // 42px
+        const int delW     = KB_KEY_W + 14;  // 42px
+        const int r3tw     = shiftW + KB_GAP + 7 * KB_KEY_W + 6 * KB_GAP + KB_GAP + delW;
+        const int r3x      = (320 - r3tw) / 2;
+        const int lettersX = r3x + shiftW + KB_GAP;
+        const int delX     = lettersX + 7 * (KB_KEY_W + KB_GAP);
+        // Botão Shift
+        if (x >= r3x && x < r3x + shiftW) {
+            keyboardShift = !keyboardShift;
+            M5.Speaker.tone(660, 15); return;
+        }
+        // DEL
         if (x >= delX && x < delX + delW) {
             int len = strlen(keyboardBuf);
             if (len > 0) keyboardBuf[len - 1] = '\0';
             M5.Speaker.tone(400, 20); return;
         }
+        // Letras
         for (int i = 0; i < 7; i++) {
-            int kx = r3x + i * (KB_KEY_W + KB_GAP);
+            int kx = lettersX + i * (KB_KEY_W + KB_GAP);
             if (x >= kx && x < kx + KB_KEY_W) {
-                char ch[2] = { KB_ROW3[i], 0 };
+                char ch[2] = { keyboardShift ? KB_ROW3[i] : (char)tolower(KB_ROW3[i]), 0 };
                 if (strlen(keyboardBuf) < 15) strncat(keyboardBuf, ch, 1);
+                keyboardShift = false;
                 M5.Speaker.tone(880, 12); return;
             }
         }

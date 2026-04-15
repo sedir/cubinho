@@ -479,6 +479,15 @@ bool calendarFetchToday()
         return false;
     }
 
+    // Cache válido para hoje: pula o HTTP fetch para evitar tráfego desnecessário
+    // a cada ciclo de 30 min. Invalida automaticamente à meia-noite (data muda).
+    if (isCacheForToday() && (_status == CAL_STATUS_OK || _status == CAL_STATUS_EMPTY))
+    {
+        LOG_I("calendar", "Cache valido para hoje (%04d-%02d-%02d) — fetch ignorado",
+              _cacheYear, _cacheMonth, _cacheDay);
+        return true;
+    }
+
     time_t todayStart = 0;
     time_t tomorrowStart = 0;
     struct tm todayInfo = {};
@@ -558,9 +567,6 @@ bool calendarFetchToday()
         return false;
     }
 
-    clearCacheForToday();
-    setCacheDate(todayInfo);
-    _vtimezoneCount = 0;
     int todayDateKey = (todayInfo.tm_year + 1900) * 10000 +
                        (todayInfo.tm_mon + 1) * 100 +
                        todayInfo.tm_mday;
@@ -583,6 +589,10 @@ bool calendarFetchToday()
     }
     CAL_DBG("Fetch OK (%d bytes, Content-Length=%d) todayKey=%d todayStart=%ld tomorrowStart=%ld",
             payload.length(), contentLength, todayDateKey, (long)todayStart, (long)tomorrowStart);
+
+    clearCacheForToday();
+    setCacheDate(todayInfo);
+    _vtimezoneCount = 0;
 
     bool inEvent = false;
     char currentTitle[40] = "";

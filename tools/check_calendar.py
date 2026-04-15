@@ -7,9 +7,10 @@ Uso:
     python3 tools/check_calendar.py <URL_ICS> --date 2026-04-14
     python3 tools/check_calendar.py <URL_ICS> --tz-offset 32400
 
-O script replica fielmente o comportamento do firmware, inclusive a limitação de
-não interpretar TZID (trata todos os timestamps sem 'Z' como horário local do
-dispositivo). Diferenças são sinalizadas explicitamente.
+O script replica fielmente o comportamento do firmware, incluindo o suporte
+parcial a TZID: usa VTIMEZONE quando presente e uma pequena tabela IANA de
+fallback; fora disso, timestamps sem 'Z' caem no fuso local do dispositivo.
+Diferenças são sinalizadas explicitamente.
 
 Parâmetros:
     --date       Simula "hoje" como outra data (YYYY-MM-DD). Padrão: hoje.
@@ -87,9 +88,9 @@ def parse_date_value(value: str, device_tz: timezone):
     Replica parseDateValue + toTimestamp do firmware.
     Retorna (dt_aware, all_day, is_utc, warning) ou None se inválido.
 
-    ATENÇÃO: o firmware ignora TZID. Qualquer timestamp sem 'Z' é tratado
-    como horário local do dispositivo (device_tz). Esta função replica esse
-    comportamento — divergências com TZID são reportadas em 'warning'.
+    ATENÇÃO: o firmware só resolve TZID quando ele aparece em um VTIMEZONE do
+    feed ou em uma tabela IANA reduzida. Fora disso, timestamps sem 'Z' são
+    tratados como horário local do dispositivo (device_tz).
     """
     if len(value) < 8:
         return None
@@ -117,7 +118,8 @@ def parse_date_value(value: str, device_tz: timezone):
         if is_utc:
             dt = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
         else:
-            # Firmware usa mktime (local do dispositivo) — ignora TZID
+            # Fallback do firmware: horário local do dispositivo quando TZID
+            # não é resolvido por VTIMEZONE/IANA.
             dt = datetime(year, month, day, hour, minute, second, tzinfo=device_tz)
     else:
         # Dia inteiro — meia-noite no fuso do dispositivo

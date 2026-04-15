@@ -299,16 +299,23 @@ void qrScannerBegin(QRScanMode mode) {
     _lastQrLog    = 0;
     _usingDirectLuma = false;
 
-    _active = true;
-
     _q = quirc_new();
     if (!_q) { LOG_E("qr", "Falha ao alocar quirc"); setStatusMessage("Erro: memoria QR"); return; }
 
     if (!ensureQuircSize(kCameraWidth, kCameraHeight)) {
-        LOG_E("qr", "Falha ao redimensionar quirc"); setStatusMessage("Erro: buffer QR"); return;
+        LOG_E("qr", "Falha ao redimensionar quirc");
+        setStatusMessage("Erro: buffer QR");
+        quirc_destroy(_q); _q = nullptr;
+        return;
     }
 
-    if (!initCamera()) { setStatusMessage("Erro: camera indisponivel"); return; }
+    if (!initCamera()) {
+        setStatusMessage("Erro: camera indisponivel");
+        quirc_destroy(_q); _q = nullptr;
+        return;
+    }
+
+    _active = true;  // marcado ativo apenas após init completo com sucesso
 
     LOG_I("qr", "Scanner iniciado");
 }

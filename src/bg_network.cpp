@@ -43,6 +43,9 @@ static void bgTaskFunc(void* param) {
 
         LOG_I("bg_net", "Fetch concluido em %lu ms (heap livre: %u)",
               millis() - startMs, heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+        // Barrier: garante que todas as escritas em _bgWeatherOut sejam visíveis
+        // pelo core 1 antes que _bgDone seja lido como true.
+        __sync_synchronize();
         _bgDone = true;
     }
 }

@@ -75,7 +75,7 @@ static void applyBrightnessFade() {
 static void updateAutoBrightnessTarget() {
     if (!_autoBrightnessEn) return;
     if (_powerState != POWER_ACTIVE || !_alsInitialized) return;
-    if (millis() - _lastTouchMs < 5000) return;  // não ajusta enquanto em uso
+    if (millis() - _lastTouchMs < 2000) return;  // não ajusta enquanto em uso
 
     static uint32_t lastAlsMs = 0;
     if (millis() - lastAlsMs < 2000) return;  // lê a cada 2s
@@ -217,7 +217,13 @@ void powerEnterDeepSleep() {
     delay(50);
 
     esp_sleep_enable_ext0_wakeup((gpio_num_t)DEEP_SLEEP_WAKEUP_GPIO, 0);
-    esp_sleep_enable_timer_wakeup((uint64_t)_weatherIntervalMs * 1000ULL);
+
+    // Compensa o tempo de boot + fetch (~5s) para evitar drift acumulado ao longo do dia.
+    // Sem compensação: cada ciclo de 30 min perde ~5s → ~4h de skew em 30 dias.
+    constexpr uint64_t kBootCompensationUs = 5000000ULL;  // 5 segundos em µs
+    uint64_t sleepUs = (uint64_t)_weatherIntervalMs * 1000ULL;
+    if (sleepUs > kBootCompensationUs) sleepUs -= kBootCompensationUs;
+    esp_sleep_enable_timer_wakeup(sleepUs);
 
     LOG_I("power", "Entrando em deep sleep");
     Serial.flush();

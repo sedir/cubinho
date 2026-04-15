@@ -79,7 +79,7 @@ static const int kSleepOpts[]    = { 2, 5, 10, 30, 60, 0 };      // minutos (0=N
 static const int kWeatherCnt  = 4;
 static const int kBrightCnt   = 5;
 static const int kDimCnt      = 5;
-static const int kSleepCnt    = 5;
+static const int kSleepCnt    = 6;
 static ConfirmAction g_confirmAction = CONFIRM_NONE;
 
 // ── Altura virtual de cada entrada ──────────────────────────────────────────
