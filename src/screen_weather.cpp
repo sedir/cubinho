@@ -543,8 +543,8 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
         }
     }
 
-    int x2 = drawTempC(display, "Max: ", data.tempMax, 0, RIGHT_X, 44, COLOR_TEXT_PRIMARY);
-    drawTempC(display, "  Min: ", data.tempMin, 0, x2, 44, COLOR_TEXT_PRIMARY);
+    drawTempC(display, "Max:", data.tempMax, 0, RIGHT_X, 44, COLOR_TEXT_PRIMARY);
+    drawTempC(display, "Min:", data.tempMin, 0, RIGHT_X + 83, 44, COLOR_TEXT_PRIMARY);
 
     display.setFont(&fonts::FreeSans9pt7b);
     snprintf(buf, sizeof(buf), "Umidade: %.0f%%", data.humidity);
