@@ -29,6 +29,13 @@ static uint32_t _detectCount = 0;
 static bool     _firstFrame  = true;
 static bool     _statsLogged = false;
 static uint32_t _lastQrLog   = 0;
+static bool     _usingDirectLuma = false;
+
+enum QrImageTransform : uint8_t {
+    kQrTransformNone  = 0,
+    kQrTransformFlipX = 1 << 0,
+    kQrTransformFlipY = 1 << 1,
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 static void setStatusMessage(const char* message) {
@@ -93,16 +100,97 @@ static bool parseWifiQR(const char* payload,
     return ssid[0] != '\0';
 }
 
-// Converte pixel RGB565 da câmera para luma 8-bit.
-// O GC0308 escreve RGB565 big-endian na memória; ao ler como uint16_t no
-// ESP32 (little-endian), os bytes ficam invertidos — bswap16 corrige isso
-// antes de extrair R, G, B.
-static inline uint8_t rgb565ToLuma(uint16_t rawLE) {
-    uint16_t px = __builtin_bswap16(rawLE);
-    uint8_t r8 = (((px >> 11) & 0x1F) * 527 + 23) >> 6;
-    uint8_t g8 = (((px >>  5) & 0x3F) * 259 + 33) >> 6;
-    uint8_t b8 = (( px        & 0x1F) * 527 + 23) >> 6;
+static inline uint8_t rgb565BytesToLuma(uint8_t hb, uint8_t lb) {
+    uint8_t r8 = hb & 0xF8;
+    uint8_t g8 = ((hb & 0x07) << 5) | ((lb & 0xE0) >> 3);
+    uint8_t b8 = (lb & 0x1F) << 3;
     return (uint8_t)((r8 * 77 + g8 * 150 + b8 * 29) >> 8);
+}
+
+static inline uint16_t lumaToRgb565(uint8_t y) {
+    return lgfx::swap565(y, y, y);
+}
+
+static inline bool frameHasDirectLuma(const camera_fb_t* fb) {
+    return _usingDirectLuma || fb->format == PIXFORMAT_YUV422 || fb->format == PIXFORMAT_GRAYSCALE;
+}
+
+static inline uint8_t frameLumaAt(const camera_fb_t* fb, int x, int y) {
+    const int width = (int)fb->width;
+    if (frameHasDirectLuma(fb)) {
+        if (fb->format == PIXFORMAT_GRAYSCALE) {
+            return fb->buf[y * width + x];
+        }
+        const uint8_t* row = fb->buf + (y * width * 2);
+        return row[x * 2];
+    }
+
+    const uint8_t* px = fb->buf + ((y * width + x) * 2);
+    return rgb565BytesToLuma(px[0], px[1]);
+}
+
+static void fillQuircImageFromFrame(const camera_fb_t* fb, uint8_t* qimage, int width, int height,
+                                    QrImageTransform transform) {
+    for (int y = 0; y < height; ++y) {
+        int sy = (transform & kQrTransformFlipY) ? (height - 1 - y) : y;
+        uint8_t* dstRow = qimage + y * width;
+        for (int x = 0; x < width; ++x) {
+            int sx = (transform & kQrTransformFlipX) ? (width - 1 - x) : x;
+            dstRow[x] = frameLumaAt(fb, sx, sy);
+        }
+    }
+}
+
+static bool tryDecodeDetectedQRCodes(int count) {
+    if (count <= 0) return false;
+
+    struct quirc_code* code = new (std::nothrow) quirc_code;
+    struct quirc_data* data = new (std::nothrow) quirc_data;
+    if (!code || !data) {
+        if (code) delete code;
+        if (data) delete data;
+        LOG_E("qr", "Falha ao alocar buffers de decode");
+        return false;
+    }
+
+    bool decoded = false;
+    for (int i = 0; i < count; i++) {
+        quirc_extract(_q, i, code);
+        quirc_decode_error_t decErr = quirc_decode(code, data);
+        if (decErr != QUIRC_SUCCESS) {
+            LOG_W("qr", "quirc_decode falhou: %s", quirc_strerror(decErr));
+            continue;
+        }
+
+        char payload[512];
+        copyQrPayload(*data, payload, sizeof(payload));
+        LOG_I("qr", "QR: %.80s", payload);
+        if (_mode == QR_SCAN_WIFI) {
+            char ssid[64], pass[64];
+            if (parseWifiQR(payload, ssid, sizeof(ssid), pass, sizeof(pass))) {
+                wifiSaveCredentials(ssid, pass);
+                _success = true;
+                setStatusMessage("WiFi salvo! Reiniciando...");
+                decoded = true;
+            }
+        } else {
+            bool isUrl = strncmp(payload, "http://",  7) == 0 ||
+                         strncmp(payload, "https://", 8) == 0 ||
+                         strncmp(payload, "webcal://",9) == 0;
+            if (isUrl) {
+                runtimeConfigSaveCalendarUrl(payload);
+                _success = true;
+                setStatusMessage("URL iCal salva!");
+                decoded = true;
+            }
+        }
+
+        if (decoded) break;
+    }
+
+    delete code;
+    delete data;
+    return decoded;
 }
 
 static bool ensureQuircSize(int width, int height) {
@@ -160,7 +248,13 @@ static bool initCamera() {
         return false;
     }
     sensor_t* s = CoreS3.Camera.sensor;
+    _usingDirectLuma = false;
     if (s) {
+        if (s->set_pixformat(s, PIXFORMAT_YUV422) == 0) {
+            _usingDirectLuma = true;
+        } else {
+            LOG_W("qr", "GC0308 nao aceitou YUV422; mantendo RGB565");
+        }
         s->set_vflip(s, 1);
         s->set_hmirror(s, 1);
         // Nota: no GC0308, set_brightness e set_saturation são no-ops (set_dummy).
@@ -168,7 +262,8 @@ static bool initCamera() {
         // passar qualquer N != 0 sobrescreve o default (≈0x40) causando imagem lavada.
         // Não alterar contrast — manter defaults do sensor.
     }
-    LOG_I("qr", "Camera GC0308 inicializada (RGB565 QVGA)");
+    LOG_I("qr", "Camera GC0308 inicializada (%s QVGA)",
+          _usingDirectLuma ? "YUV422/luma" : "RGB565");
     return true;
 }
 
@@ -188,6 +283,7 @@ void qrScannerBegin(QRScanMode mode) {
     _firstFrame   = true;
     _statsLogged  = false;
     _lastQrLog    = 0;
+    _usingDirectLuma = false;
 
     _active = true;
 
@@ -233,31 +329,42 @@ bool qrScannerUpdate(lgfx::LovyanGFX& d, bool touchReleased) {
     // Display: empurra apenas as linhas entre as barras de overlay (30..203).
     // As regiões das barras (0-29 e 204-239) nunca são sobrescritas pela câmera,
     // eliminando o flickering causado por redesenhar a UI sobre o frame completo.
-    // Não usar o sprite (d): pushImage em sprite causa double-swap → cores erradas.
+    // Em YUV422/GRAYSCALE, desenha um preview monocromático a partir da luma.
     {
-        constexpr int kBarTop    = 30;
-        constexpr int kBarBot    = 36;  // altura da barra inferior
-        constexpr int kMidH      = kCameraHeight - kBarTop - kBarBot;  // 174 linhas
-        const uint16_t* midStart = (const uint16_t*)fb->buf + kBarTop * (int)fb->width;
-        CoreS3.Display.startWrite();
-        CoreS3.Display.setAddrWindow(0, kBarTop, (int32_t)fb->width, kMidH);
-        CoreS3.Display.writePixels(midStart, (int32_t)fb->width * kMidH, false);
-        CoreS3.Display.endWrite();
+        constexpr int kBarTop = 30;
+        constexpr int kBarBot = 36;
+        constexpr int kMidH   = kCameraHeight - kBarTop - kBarBot;
+
+        if (!frameHasDirectLuma(fb) && fb->format == PIXFORMAT_RGB565) {
+            const uint16_t* midStart = (const uint16_t*)fb->buf + kBarTop * (int)fb->width;
+            CoreS3.Display.startWrite();
+            CoreS3.Display.setAddrWindow(0, kBarTop, (int32_t)fb->width, kMidH);
+            CoreS3.Display.writePixels(midStart, (int32_t)fb->width * kMidH, false);
+            CoreS3.Display.endWrite();
+        } else if (frameHasDirectLuma(fb)) {
+            uint16_t grayLine[kCameraWidth];
+            CoreS3.Display.startWrite();
+            for (int y = 0; y < kMidH; ++y) {
+                for (int x = 0; x < (int)fb->width; ++x) {
+                    grayLine[x] = lumaToRgb565(frameLumaAt(fb, x, kBarTop + y));
+                }
+                CoreS3.Display.setAddrWindow(0, kBarTop + y, (int32_t)fb->width, 1);
+                CoreS3.Display.writePixels(grayLine, (int32_t)fb->width, false);
+            }
+            CoreS3.Display.endWrite();
+        }
     }
     // Barras e moldura: desenhadas sobre o display; persistem entre frames pois
     // a câmera não sobrescreve mais essas regiões.
     drawOverlayUI(CoreS3.Display);
 
-    // Quirc: converte RGB565 → luma para cada pixel
+    // Quirc: usa luma direta em YUV422/GRAYSCALE e cai para RGB565 quando preciso.
     if (_q && ensureQuircSize((int)fb->width, (int)fb->height)) {
         int qw, qh;
         uint8_t* qimage = quirc_begin(_q, &qw, &qh);
         if (qimage && qw == (int)fb->width && qh == (int)fb->height) {
-            const uint16_t* rgb565 = (const uint16_t*)fb->buf;
             const int npx = qw * qh;
-            for (int i = 0; i < npx; ++i) {
-                qimage[i] = rgb565ToLuma(rgb565[i]);
-            }
+            fillQuircImageFromFrame(fb, qimage, qw, qh, kQrTransformNone);
             quirc_end(_q);
 
             // Stats do primeiro frame — confirma qualidade de imagem para quirc
@@ -284,41 +391,33 @@ bool qrScannerUpdate(lgfx::LovyanGFX& d, bool touchReleased) {
 
             if (count > 0) {
                 LOG_I("qr", "quirc detectou %d codigo(s)", count);
-                struct quirc_code* code = new (std::nothrow) quirc_code;
-                struct quirc_data* data = new (std::nothrow) quirc_data;
-                if (code && data) {
-                    for (int i = 0; i < count; i++) {
-                        quirc_extract(_q, i, code);
-                        quirc_decode_error_t decErr = quirc_decode(code, data);
-                        if (decErr != QUIRC_SUCCESS) {
-                            LOG_W("qr", "quirc_decode falhou: %s", quirc_strerror(decErr));
-                        } else {
-                            char payload[512];
-                            copyQrPayload(*data, payload, sizeof(payload));
-                            LOG_I("qr", "QR: %.80s", payload);
-                            if (_mode == QR_SCAN_WIFI) {
-                                char ssid[64], pass[64];
-                                if (parseWifiQR(payload, ssid, sizeof(ssid), pass, sizeof(pass))) {
-                                    wifiSaveCredentials(ssid, pass);
-                                    _success = true;
-                                    setStatusMessage("WiFi salvo! Reiniciando...");
-                                }
-                            } else {
-                                bool isUrl = strncmp(payload, "http://",  7) == 0 ||
-                                             strncmp(payload, "https://", 8) == 0 ||
-                                             strncmp(payload, "webcal://",9) == 0;
-                                if (isUrl) {
-                                    runtimeConfigSaveCalendarUrl(payload);
-                                    _success = true;
-                                    setStatusMessage("URL iCal salva!");
-                                }
-                            }
+                bool decoded = tryDecodeDetectedQRCodes(count);
+
+                if (!decoded) {
+                    struct RetryTransform { QrImageTransform transform; const char* name; };
+                    constexpr RetryTransform kRetries[] = {
+                        { kQrTransformFlipX, "flip-x"   },
+                        { kQrTransformFlipY, "flip-y"   },
+                        { (QrImageTransform)(kQrTransformFlipX | kQrTransformFlipY), "rot-180" },
+                    };
+
+                    for (const auto& retry : kRetries) {
+                        qimage = quirc_begin(_q, &qw, &qh);
+                        if (!qimage || qw != (int)fb->width || qh != (int)fb->height) break;
+
+                        fillQuircImageFromFrame(fb, qimage, qw, qh, retry.transform);
+                        quirc_end(_q);
+
+                        int retryCount = quirc_count(_q);
+                        if (retryCount <= 0) continue;
+
+                        LOG_I("qr", "retry %s detectou %d codigo(s)", retry.name, retryCount);
+                        if (tryDecodeDetectedQRCodes(retryCount)) {
+                            decoded = true;
+                            break;
                         }
-                        if (_success) break;
                     }
                 }
-                if (code) delete code;
-                if (data) delete data;
             }
         } else if (qimage) {
             quirc_end(_q);
