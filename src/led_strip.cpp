@@ -8,7 +8,7 @@
 #define COLOR_ORDER GRB
 
 #define BREATH_MIN   15
-#define BREATH_MAX  200
+#define BREATH_MAX   80
 
 static CRGB leds[LED_COUNT];
 
@@ -24,7 +24,7 @@ void ledOff() {
 }
 
 void ledUpdate(bool isDim, bool alarmActive, bool timerRunning) {
-    if (isDim) { ledOff(); return; }
+    if (isDim || (!alarmActive && !timerRunning)) { ledOff(); return; }
 
     uint32_t now = millis();
 

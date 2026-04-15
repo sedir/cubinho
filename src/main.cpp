@@ -1,6 +1,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <esp_pm.h>
 #include "config.h"
 #include "theme.h"
 #include "logger.h"
@@ -95,7 +96,7 @@ static void applyConfiguredTimezone() {
 }
 
 static void updateOrientation() {
-    if (millis() - lastImuMs < 500) return;
+    if (millis() - lastImuMs < 2000) return;
     lastImuMs = millis();
 
     float ax, ay, az;
@@ -117,6 +118,7 @@ static void updateOrientation() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
 static void initSprite() {
     // Item #13: libera sprites anteriores se existirem
     if (canvas)     { delete canvas;     canvas     = nullptr; }
@@ -281,7 +283,7 @@ static void updateNextEvent(bool force = false) {
 }
 
 // ── Log periódico de sensores ────────────────────────────────────────────────
-#define STATUS_LOG_INTERVAL_MS 60000UL
+#define STATUS_LOG_INTERVAL_MS 300000UL
 
 static void logSensorStatus() {
     static uint32_t lastStatusMs = 0;
@@ -432,6 +434,20 @@ void setup() {
     telnetLogSetBoot(rtcBootCount);
     needsRedraw = true;
     updateNextEvent();  // item #24
+
+    // Reduz CPU para 80 MHz em modo UI (suficiente para display/I2C/touch).
+    // O driver WiFi adquire lock automático e sobe para 240 MHz quando necessário.
+    setCpuFrequencyMhz(80);
+
+    // Habilita light sleep automático durante delay() e idle do RTOS.
+    // Em deep sleep o PM é irrelevante; aqui economiza ~10–20 mA em modo ativo.
+    esp_pm_config_esp32s3_t pm_cfg = {
+        .max_freq_mhz       = 240,
+        .min_freq_mhz       = 80,
+        .light_sleep_enable = true,
+    };
+    esp_pm_configure(&pm_cfg);
+
     LOG_I("main", "Setup concluido");
 }
 
@@ -618,7 +634,7 @@ void loop() {
 
     // ── Proximidade — acorda do dim ──
     static uint32_t lastProxMs = 0;
-    if (powerIsDim() && (millis() - lastProxMs >= 100)) {
+    if (powerIsDim() && (millis() - lastProxMs >= 500)) {
         lastProxMs = millis();
         uint16_t prox = ltr553ReadProx();
         if (prox > LTR553_PROX_THRESH) {
@@ -631,7 +647,7 @@ void loop() {
     // ── Acelerômetro — acorda do dim ao detectar movimento ──
     static uint32_t lastAccelMs   = 0;
     static float    lastAccelMag  = -1.0f;  // -1 = não inicializado
-    if (powerIsDim() && powerIsAccelWakeEnabled() && (millis() - lastAccelMs >= 200)) {
+    if (powerIsDim() && powerIsAccelWakeEnabled() && (millis() - lastAccelMs >= 500)) {
         lastAccelMs = millis();
         float ax, ay, az;
         if (M5.Imu.getAccel(&ax, &ay, &az)) {
@@ -805,10 +821,11 @@ void loop() {
         }
     }
 
-    if (powerIsDim() && !needsRedraw) { delay(100); return; }
+    if (powerIsDim() && !needsRedraw) { delay(150); return; }
 
     uint32_t now = millis();
-    bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400u : 1000u));
+    uint32_t refreshRate = (currentScreen == 0) ? 1000u : 5000u;
+    bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400u : refreshRate));
     if (needsRedraw || timeToRefresh) {
         drawCurrentScreen(*fb);
         pushFrame();
@@ -816,5 +833,5 @@ void loop() {
         needsRedraw = false;
     }
 
-    delay(20);
+    delay(alarmActive ? 20 : 50);
 }

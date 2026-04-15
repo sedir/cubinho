@@ -231,7 +231,13 @@ void powerEnterDeepSleep() {
 }
 
 int batteryPercent() {
-    return M5.Power.getBatteryLevel();
+    static int      _cached = -1;
+    static uint32_t _lastMs = 0;
+    if (_cached < 0 || millis() - _lastMs >= 30000) {
+        _cached = M5.Power.getBatteryLevel();
+        _lastMs = millis();
+    }
+    return _cached;
 }
 
 bool batteryIsCharging() {
