@@ -21,6 +21,7 @@
 #include "bg_network.h"
 #include "chime_wav.h"
 #include "qr_scanner.h"
+#include "voice_cmd.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
@@ -173,6 +174,10 @@ static void drawCurrentScreen(lgfx::LovyanGFX& target) {
         case 2: screenSystemDraw(target, rtcBootCount); break;
         case 3: screenSettingsDraw(target, g_runtimeCfg, (int)g_settingsScrollAnim); break;
     }
+    // Ícone de status de voz no canto superior esquerdo (IDLE ou LISTENING)
+    voiceCmdDrawStatusIcon(target);
+    // Overlay completo apenas durante a janela de classificação
+    if (voiceCmdGetState() == VSTATE_LISTENING) voiceCmdDrawOverlay(target);
 }
 
 static void animateTransition(int fromScreen, int toScreen, int direction) {
@@ -368,7 +373,8 @@ void setup() {
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
-    runtimeConfigApply(g_runtimeCfg);
+    runtimeConfigApply(g_runtimeCfg);  // aplica tudo, inclusive voiceCmdSetEnabled
+    voiceCmdInit(g_runtimeCfg.voiceEnabled);
 
     #undef SPLASH
 
@@ -701,12 +707,61 @@ void loop() {
         needsRedraw = true;
     }
 
+    // ── Comandos por voz — always-on poll ────────────────────────────────────
+    if (voiceCmdIsEnabled()) {
+        VoiceCommand vcmd = voiceCmdUpdate();
+
+        // Overlay visível durante LISTENING → precisa redesenhar a cada frame
+        if (voiceCmdGetState() == VSTATE_LISTENING) needsRedraw = true;
+
+        if (vcmd != VCMD_NONE) {
+            needsRedraw = true;
+            switch (vcmd) {
+                case VCMD_NEXT_SCREEN: {
+                    if (currentScreen != 3) {
+                        int ns = (currentScreen + 1) % SCREEN_COUNT;
+                        animateTransition(currentScreen, ns, 1);
+                        currentScreen = ns;
+                        LOG_I("main", "Voz: proxima tela -> %d", ns);
+                    }
+                    break;
+                }
+                case VCMD_PREV_SCREEN: {
+                    if (currentScreen != 3) {
+                        int ns = (currentScreen - 1 + SCREEN_COUNT) % SCREEN_COUNT;
+                        animateTransition(currentScreen, ns, -1);
+                        currentScreen = ns;
+                        LOG_I("main", "Voz: tela anterior -> %d", ns);
+                    }
+                    break;
+                }
+                case VCMD_TIMER_TOGGLE:
+                case VCMD_TIMER_RESET: {
+                    if (currentScreen != 0) {
+                        animateTransition(currentScreen, 0, -1);
+                        currentScreen = 0;
+                    }
+                    screenHomeTimerLongPress();
+                    LOG_I("main", "Voz: timer %s",
+                          vcmd == VCMD_TIMER_TOGGLE ? "toggle" : "reset");
+                    break;
+                }
+                case VCMD_AMBIGUOUS:
+                    LOG_W("main", "Voz: padrao ambiguo");
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
     // ── Alarme sonoro ──
     bool alarmActive = screenHomeIsAlarmActive();
     if (alarmActive) {
         if (!alarmWasActive) {
             M5.Speaker.setVolume(160);  // mais alto que a UI
             lastBeepMs = 0;             // dispara o primeiro chime imediatamente
+            voiceCmdSuspend();          // mic conflita com o speaker; suspende durante alarme
         }
         uint32_t now = millis();
         if (now - lastBeepMs >= 3200) {
@@ -718,6 +773,7 @@ void loop() {
     } else if (alarmWasActive) {
         M5.Speaker.stop();
         M5.Speaker.setVolume(85);  // restaura volume de UI
+        voiceCmdResume();           // agenda reinício do mic após delay
         LOG_I("main", "Alarme encerrado");
     }
     alarmWasActive = alarmActive;

@@ -7,6 +7,7 @@
 #include "runtime_config.h"
 #include "screen_home.h"
 #include "qr_scanner.h"
+#include "voice_cmd.h"
 #include <M5Unified.h>
 
 // ── Layout interno ───────────────────────────────────────────────────────────
@@ -48,6 +49,7 @@ static const VEntry kEntries[] = {
     { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 18
     { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 19
     { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 20
+    { EKIND_TOGGLE,   "Cmd por voz",     "Press longa no header p/ ouvir"    },  // 21
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -69,6 +71,7 @@ enum ItemIdx {
     IDX_ACCEL_WAKE    = 17,
     IDX_RESTART       = 19,
     IDX_FACTORY_RESET = 20,
+    IDX_VOICE         = 21,
 };
 
 // Opções de ciclo
@@ -121,6 +124,7 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
         case IDX_KEEP_ALIVE:  return cfg.wifiKeepAlive  ? "ON" : "OFF";
         case IDX_AUTO_BRIGHT: return cfg.autoBrightness ? "ON" : "OFF";
         case IDX_ACCEL_WAKE:  return cfg.accelWake      ? "ON" : "OFF";
+        case IDX_VOICE:       return cfg.voiceEnabled   ? "ON" : "OFF";
         case IDX_TIMER_LABEL_1:
         case IDX_TIMER_LABEL_2:
         case IDX_TIMER_LABEL_3:
@@ -443,6 +447,9 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
             break;
         case IDX_ACCEL_WAKE:
             cfg.accelWake = !cfg.accelWake;
+            break;
+        case IDX_VOICE:
+            cfg.voiceEnabled = !cfg.voiceEnabled;
             break;
         case IDX_TIMER_LABEL_1:
         case IDX_TIMER_LABEL_2:

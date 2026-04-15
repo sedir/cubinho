@@ -3,6 +3,7 @@
 #include "wifi_manager.h"
 #include "power_manager.h"
 #include "screen_home.h"
+#include "voice_cmd.h"
 #include <Preferences.h>
 
 #ifndef CALENDAR_ICS_URL
@@ -21,6 +22,7 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     cfg.autoBrightness      = _prefs.getBool("autoBright", AUTO_BRIGHTNESS_ENABLED);
     cfg.deepSleepTimeoutMin = _prefs.getInt ("sleepMin",   (int)(DEEP_SLEEP_TIMEOUT_MS / 60000UL));
     cfg.accelWake           = _prefs.getBool("accelWake",  ACCEL_WAKE_ENABLED);
+    cfg.voiceEnabled        = _prefs.getBool("voiceEn",    false);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
@@ -40,6 +42,7 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.putBool("autoBright", cfg.autoBrightness);
     _prefs.putInt ("sleepMin",   cfg.deepSleepTimeoutMin);
     _prefs.putBool("accelWake",  cfg.accelWake);
+    _prefs.putBool("voiceEn",    cfg.voiceEnabled);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
@@ -60,6 +63,7 @@ void runtimeConfigApply(const RuntimeConfig& cfg) {
     powerSetDeepSleepTimeout(sleepMs);
     powerSetWeatherInterval((uint32_t)cfg.weatherIntervalMin * 60000UL);
     powerSetAccelWake(cfg.accelWake);
+    voiceCmdSetEnabled(cfg.voiceEnabled);
     for (int i = 0; i < MAX_TIMERS; i++) {
         screenHomeSetTimerLabelPreset(i, cfg.timerLabelPreset[i]);
     }

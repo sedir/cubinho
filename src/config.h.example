@@ -78,3 +78,9 @@
 
 // Debug — log verboso do parsing iCal (desative em produção)
 #define CALENDAR_DEBUG  false
+
+// Comandos por voz — piso mínimo de energia RMS para detecção de voz.
+// Aumente se o ambiente for muito barulhento (cozinha com exaustor, TV, etc.).
+// O módulo calibra automaticamente o limiar a partir do ruído ambiente, mas
+// nunca abaixo deste valor. Faixa típica: 400 (silencioso) – 1500 (barulhento).
+#define VOICE_ENERGY_THRESH_MIN  600
