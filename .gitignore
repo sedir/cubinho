@@ -11,3 +11,5 @@ src/config.h
 
 # macOS
 .DS_Store
+
+.pio-core-temp

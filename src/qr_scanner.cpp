@@ -107,8 +107,22 @@ static inline uint8_t rgb565BytesToLuma(uint8_t hb, uint8_t lb) {
     return (uint8_t)((r8 * 77 + g8 * 150 + b8 * 29) >> 8);
 }
 
+static inline uint8_t clampByte(int value) {
+    return (uint8_t)(value < 0 ? 0 : (value > 255 ? 255 : value));
+}
+
 static inline uint16_t lumaToRgb565(uint8_t y) {
     return lgfx::swap565(y, y, y);
+}
+
+static inline uint16_t yuvToRgb565(uint8_t y, uint8_t u, uint8_t v) {
+    int c = (int)y - 16;
+    int d = (int)u - 128;
+    int e = (int)v - 128;
+    int r = (298 * c + 409 * e + 128) >> 8;
+    int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+    int b = (298 * c + 516 * d + 128) >> 8;
+    return lgfx::swap565(clampByte(r), clampByte(g), clampByte(b));
 }
 
 static inline bool frameHasDirectLuma(const camera_fb_t* fb) {
@@ -342,14 +356,28 @@ bool qrScannerUpdate(lgfx::LovyanGFX& d, bool touchReleased) {
             CoreS3.Display.writePixels(midStart, (int32_t)fb->width * kMidH, false);
             CoreS3.Display.endWrite();
         } else if (frameHasDirectLuma(fb)) {
-            uint16_t grayLine[kCameraWidth];
+            uint16_t line[kCameraWidth];
             CoreS3.Display.startWrite();
             for (int y = 0; y < kMidH; ++y) {
-                for (int x = 0; x < (int)fb->width; ++x) {
-                    grayLine[x] = lumaToRgb565(frameLumaAt(fb, x, kBarTop + y));
+                if (fb->format == PIXFORMAT_YUV422 || _usingDirectLuma) {
+                    const uint8_t* row = fb->buf + ((kBarTop + y) * (int)fb->width * 2);
+                    for (int x = 0; x < (int)fb->width; x += 2) {
+                        uint8_t y0 = row[x * 2 + 0];
+                        uint8_t u  = row[x * 2 + 1];
+                        uint8_t y1 = row[x * 2 + 2];
+                        uint8_t v  = row[x * 2 + 3];
+                        line[x] = yuvToRgb565(y0, u, v);
+                        if (x + 1 < (int)fb->width) {
+                            line[x + 1] = yuvToRgb565(y1, u, v);
+                        }
+                    }
+                } else {
+                    for (int x = 0; x < (int)fb->width; ++x) {
+                        line[x] = lumaToRgb565(frameLumaAt(fb, x, kBarTop + y));
+                    }
                 }
                 CoreS3.Display.setAddrWindow(0, kBarTop + y, (int32_t)fb->width, 1);
-                CoreS3.Display.writePixels(grayLine, (int32_t)fb->width, false);
+                CoreS3.Display.writePixels(line, (int32_t)fb->width, false);
             }
             CoreS3.Display.endWrite();
         }
