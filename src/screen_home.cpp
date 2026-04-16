@@ -835,8 +835,8 @@ void screenHomeDrawAmbient(lgfx::LovyanGFX& display) {
     const int R  = 82;   // raio do mostrador
 
     // Contorno do mostrador
-    display.drawCircle(cx, cy, R,     COLOR_TEXT_SUBTLE);
-    display.drawCircle(cx, cy, R - 1, COLOR_DIVIDER);
+    display.drawCircle(cx, cy, R,     COLOR_TEXT_PRIMARY);
+    display.drawCircle(cx, cy, R - 1, COLOR_TEXT_DIM);
 
     // Marcas das horas (4 maiores nos quartos, 8 menores)
     for (int i = 0; i < 12; i++) {
@@ -846,7 +846,7 @@ void screenHomeDrawAmbient(lgfx::LovyanGFX& display) {
         display.drawLine(
             cx + (int)((R - len) * cs), cy + (int)((R - len) * sn),
             cx + (int)(R * cs),         cy + (int)(R * sn),
-            (i % 3 == 0) ? COLOR_TEXT_DIM : COLOR_TEXT_SUBTLE
+            (i % 3 == 0) ? COLOR_TEXT_PRIMARY : COLOR_TEXT_DIM
         );
     }
 
@@ -857,25 +857,25 @@ void screenHomeDrawAmbient(lgfx::LovyanGFX& display) {
         float mA = (m * 6.0f - 90.0f) * (float)M_PI / 180.0f;
         int   mx = cx + (int)(68.0f * cosf(mA));
         int   my = cy + (int)(68.0f * sinf(mA));
-        display.drawLine(cx,     cy,     mx,     my,     COLOR_TEXT_OFFWHITE);
-        display.drawLine(cx + 1, cy,     mx + 1, my,     COLOR_TEXT_OFFWHITE);
+        display.drawLine(cx,     cy,     mx,     my,     COLOR_TEXT_PRIMARY);
+        display.drawLine(cx + 1, cy,     mx + 1, my,     COLOR_TEXT_PRIMARY);
 
-        // Ponteiro das horas (espesso, 3px, comprimento 44, laranja)
+        // Ponteiro das horas (espesso, 3px, comprimento 44)
         float hA = ((h % 12) * 30.0f + m * 0.5f - 90.0f) * (float)M_PI / 180.0f;
         int   hx = cx + (int)(44.0f * cosf(hA));
         int   hy = cy + (int)(44.0f * sinf(hA));
         for (int d = -1; d <= 1; d++) {
-            display.drawLine(cx + d, cy,     hx + d, hy,     COLOR_TEXT_ACCENT);
-            display.drawLine(cx,     cy + d, hx,     hy + d, COLOR_TEXT_ACCENT);
+            display.drawLine(cx + d, cy,     hx + d, hy,     COLOR_TEXT_PRIMARY);
+            display.drawLine(cx,     cy + d, hx,     hy + d, COLOR_TEXT_PRIMARY);
         }
     }
 
     // Tampa central
-    display.fillCircle(cx, cy, 4, COLOR_TEXT_DIM);
+    display.fillCircle(cx, cy, 4, COLOR_TEXT_PRIMARY);
 
     // Hora digital discreta abaixo do mostrador
     display.setFont(&fonts::FreeSans9pt7b);
-    display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+    display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
     display.setTextDatum(MC_DATUM);
     if (timeOk) {
         char buf[8];
