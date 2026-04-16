@@ -171,7 +171,10 @@ static void pushFrame() {
 // ── Transição animada entre telas (item #25) ─────────────────────────────────
 static void drawCurrentScreen(lgfx::LovyanGFX& target) {
     switch (currentScreen) {
-        case 0: screenHomeDraw(target, wifiIsFetching(), powerIsDim()); break;
+        case 0:
+            if (powerIsDim()) screenHomeDrawAmbient(target);
+            else              screenHomeDraw(target, wifiIsFetching(), false);
+            break;
         case 1: screenWeatherDraw(target, weatherData, wifiIsFetching()); break;
         case 2: screenSystemDraw(target, rtcBootCount); break;
         case 3: screenSettingsDraw(target, g_runtimeCfg, (int)g_settingsScrollAnim); break;
@@ -586,38 +589,58 @@ void loop() {
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)
             if (touchStartY < TIMER_ZONE_Y + 26) {
-                int tabW = 48, gap = 6;
-                int startX = 160 - (MAX_TIMERS * tabW + (MAX_TIMERS - 1) * gap) / 2;
-                for (int i = 0; i < MAX_TIMERS; i++) {
+                // Tabs: 4 slots (T1 T2 T3 SW), largura 42px, gap 6px
+                int totalSlots = screenHomeGetTotalSlots();
+                int tabW = 42, gap = 6;
+                int startX = 160 - (totalSlots * tabW + (totalSlots - 1) * gap) / 2;
+                for (int i = 0; i < totalSlots; i++) {
                     int tx = startX + i * (tabW + gap);
                     if (touchStartX >= tx && touchStartX <= tx + tabW) {
-                        if (longPress) {
-                            // Long press no tab → abre teclado para renomear
+                        if (longPress && i < MAX_TIMERS) {
+                            // Long press nos tabs T1/T2/T3 → renomear
                             screenHomeOpenKeyboard(i);
                             LOG_I("main", "Teclado aberto para T%d", i + 1);
                         } else {
                             screenHomeTimerSwitchSlot(i);
+                            if (i == MAX_TIMERS)
+                                LOG_I("main", "Cronometro selecionado");
                         }
                         needsRedraw = true;
                         break;
                     }
                 }
             } else {
-                // Zona de ação do timer
+                // Zona de ação — comportamento depende do slot focado
                 bool isVertSwipe = (abs(swipeDeltaY) >= 15 && abs(swipeDeltaY) > abs(swipeDeltaX));
-                if (isVertSwipe) {
-                    // Swipe vertical → ajusta minutos (só em SETTING)
-                    screenHomeTimerSwipeAdjust(-swipeDeltaY);  // cima=negativo deltaY=mais minutos
-                    LOG_I("main", "Timer T%d: swipe %+d min", screenHomeGetFocusedSlot() + 1, -swipeDeltaY / 10);
-                    needsRedraw = true;
-                } else if (longPress) {
-                    screenHomeTimerLongPress();
-                    LOG_I("main", "Timer T%d: long press", screenHomeGetFocusedSlot() + 1);
-                    needsRedraw = true;
+                int  focSlot     = screenHomeGetFocusedSlot();
+
+                if (focSlot == MAX_TIMERS) {
+                    // Cronômetro: tap = start/pause/resume; long press = zerar
+                    if (!isVertSwipe) {
+                        if (longPress) {
+                            screenHomeStopwatchLongPress();
+                            LOG_I("main", "Cronometro: reset");
+                        } else {
+                            screenHomeStopwatchTap();
+                            LOG_I("main", "Cronometro: tap");
+                        }
+                        needsRedraw = true;
+                    }
                 } else {
-                    screenHomeTimerTap(touchStartX);
-                    LOG_I("main", "Timer T%d: tap", screenHomeGetFocusedSlot() + 1);
-                    needsRedraw = true;
+                    // Timer regressivo
+                    if (isVertSwipe) {
+                        screenHomeTimerSwipeAdjust(-swipeDeltaY);
+                        LOG_I("main", "Timer T%d: swipe %+d min", focSlot + 1, -swipeDeltaY / 10);
+                        needsRedraw = true;
+                    } else if (longPress) {
+                        screenHomeTimerLongPress();
+                        LOG_I("main", "Timer T%d: long press", focSlot + 1);
+                        needsRedraw = true;
+                    } else {
+                        screenHomeTimerTap(touchStartX);
+                        LOG_I("main", "Timer T%d: tap", focSlot + 1);
+                        needsRedraw = true;
+                    }
                 }
             }
         } else if (currentScreen == 1 && longPress) {
@@ -677,7 +700,7 @@ void loop() {
 
     // ── Dim ──
     bool wasDim = powerIsDim();
-    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive());
+    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() || screenHomeIsStopwatchRunning());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ──
@@ -693,7 +716,7 @@ void loop() {
 
     // ── Deep sleep ──
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
-        powerShouldDeepSleep()) {
+        !screenHomeIsStopwatchRunning() && powerShouldDeepSleep()) {
 
         LOG_I("main", "Deep sleep — salvando estado");
         rtcScreen  = currentScreen;

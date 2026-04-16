@@ -4,6 +4,7 @@
 #include "config.h"
 #include "logger.h"
 #include <time.h>
+#include <math.h>
 
 static const char* DIAS[]  = { "dom", "seg", "ter", "qua", "qui", "sex", "sab" };
 static const char* MESES[] = { "jan", "fev", "mar", "abr", "mai", "jun",
@@ -25,6 +26,17 @@ static int        timerLabelPreset[MAX_TIMERS] = { 0, 1, 2 };
 static char       timerCustomName[MAX_TIMERS][16] = { {0}, {0}, {0} };
 static bool       timerHasCustomName[MAX_TIMERS]  = { false, false, false };
 static int        focusedSlot = 0;
+
+// ── Estado do cronômetro (slot MAX_TIMERS) ───────────────────────────────────
+enum SwState { SW_IDLE, SW_RUNNING, SW_PAUSED };
+static SwState  g_swState   = SW_IDLE;
+static uint32_t g_swStartMs = 0;
+static uint32_t g_swAccumMs = 0;
+
+static uint32_t swGetElapsed() {
+    if (g_swState != SW_RUNNING) return g_swAccumMs;
+    return g_swAccumMs + (millis() - g_swStartMs);
+}
 
 // Evento próximo (item #24)
 static char nextEventText[48] = "";
@@ -59,6 +71,34 @@ void screenHomeSetTimerLabelPreset(int slot, int presetIdx) {
     if (slot < 0 || slot >= MAX_TIMERS) return;
     if (presetIdx < 0 || presetIdx >= TIMER_LABEL_PRESET_COUNT) presetIdx = slot % TIMER_LABEL_PRESET_COUNT;
     timerLabelPreset[slot] = presetIdx;
+}
+
+int  screenHomeGetTotalSlots()      { return MAX_TIMERS + 1; }
+bool screenHomeIsStopwatchRunning() { return g_swState == SW_RUNNING; }
+
+void screenHomeStopwatchTap() {
+    switch (g_swState) {
+        case SW_IDLE:
+            g_swStartMs = millis();
+            g_swState   = SW_RUNNING;
+            M5.Speaker.tone(440, 60);
+            break;
+        case SW_RUNNING:
+            g_swAccumMs += millis() - g_swStartMs;
+            g_swState    = SW_PAUSED;
+            break;
+        case SW_PAUSED:
+            g_swStartMs = millis();
+            g_swState   = SW_RUNNING;
+            M5.Speaker.tone(440, 30);
+            break;
+    }
+}
+
+void screenHomeStopwatchLongPress() {
+    g_swState   = SW_IDLE;
+    g_swAccumMs = 0;
+    M5.Speaker.tone(300, 40);
 }
 
 // ── API de controle ──────────────────────────────────────────────────────────
@@ -122,7 +162,7 @@ void screenHomeTimerSwipeAdjust(int deltaY) {
 }
 
 void screenHomeTimerSwitchSlot(int slot) {
-    if (slot >= 0 && slot < MAX_TIMERS) {
+    if (slot >= 0 && slot <= MAX_TIMERS) {  // MAX_TIMERS = índice do SW
         focusedSlot = slot;
         M5.Speaker.tone(80,  25);   // vibração tátil
         M5.Speaker.tone(600, 15);
@@ -177,7 +217,7 @@ bool screenHomeTimerUpdate() {
 // RUNNING é salvo como PAUSED para persistência no deep sleep
 TimerPersist screenHomeGetTimerPersist() {
     TimerPersist tp;
-    tp.focused = focusedSlot;
+    tp.focused = (focusedSlot < MAX_TIMERS) ? focusedSlot : 0;  // SW não persiste
     for (int i = 0; i < MAX_TIMERS; i++) {
         int s = 0;
         if (timerStates[i] == TIMER_RUNNING || timerStates[i] == TIMER_PAUSED) s = 2;
@@ -236,8 +276,8 @@ static void drawFocusedTimerLabel(lgfx::LovyanGFX& d, int slot, int y, uint16_t 
 
 static const int TIMER_LABEL_Y   = 148;
 static const int TIMER_VALUE_Y   = 176;
-static const int TIMER_HINT_Y    = 206;
-static const int TIMER_SUMMARY_Y = 198;
+static const int TIMER_HINT_Y    = 213;
+static const int TIMER_SUMMARY_Y = 210;
 
 // ── Teclado on-screen ────────────────────────────────────────────────────────
 static bool keyboardActive = false;
@@ -521,33 +561,37 @@ static bool drawOtherTimersSummary(lgfx::LovyanGFX& d, int focused, int y) {
     return true;
 }
 
-// ── Slot tabs (T1 T2 T3) com barra de progresso ─────────────────────────────
+// ── Slot tabs (T1 T2 T3 SW) com barra de progresso ──────────────────────────
 static void drawSlotTabs(lgfx::LovyanGFX& d, int y) {
     d.setFont(&fonts::Font0);
-    const int tabW = 48, tabH = 20, gap = 6;
-    int startX = d.width() / 2 - (MAX_TIMERS * tabW + (MAX_TIMERS - 1) * gap) / 2;
+    const int TOTAL = MAX_TIMERS + 1;  // 3 timers + cronômetro
+    const int tabW  = 42, tabH = 20, gap = 6;
+    int startX = d.width() / 2 - (TOTAL * tabW + (TOTAL - 1) * gap) / 2;
 
-    for (int i = 0; i < MAX_TIMERS; i++) {
-        int tx = startX + i * (tabW + gap);
+    for (int i = 0; i < TOTAL; i++) {
+        int tx    = startX + i * (tabW + gap);
         bool focused = (i == focusedSlot);
-        bool active  = (timerStates[i] == TIMER_RUNNING || timerStates[i] == TIMER_PAUSED);
-        bool done    = (timerStates[i] == TIMER_DONE);
+        bool isSW    = (i == MAX_TIMERS);
+        bool active  = !isSW && (timerStates[i] == TIMER_RUNNING || timerStates[i] == TIMER_PAUSED);
+        bool done    = !isSW && (timerStates[i] == TIMER_DONE);
+        bool swRun   =  isSW && (g_swState == SW_RUNNING || g_swState == SW_PAUSED);
 
         uint16_t bg = focused ? COLOR_TEXT_DIM : COLOR_BACKGROUND;
-        uint16_t fg = done ? TFT_RED : (active ? COLOR_TIMER_RUNNING : COLOR_TEXT_SUBTLE);
+        uint16_t fg = done ? TFT_RED : ((active || swRun) ? COLOR_TIMER_RUNNING : COLOR_TEXT_SUBTLE);
 
         d.fillRoundRect(tx, y, tabW, tabH, 4, bg);
         d.drawRoundRect(tx, y, tabW, tabH, 4, fg);
 
         char label[4];
-        snprintf(label, sizeof(label), "T%d", i + 1);
-        // Desloca rótulo ligeiramente para cima quando há barra de progresso
-        int textY = (active || done) ? y + tabH / 2 - 2 : y + tabH / 2;
+        if (isSW) snprintf(label, sizeof(label), "SW");
+        else      snprintf(label, sizeof(label), "T%d", i + 1);
+
+        int textY = (active || done || swRun) ? y + tabH / 2 - 2 : y + tabH / 2;
         d.setTextColor(fg, bg);
         d.setTextDatum(MC_DATUM);
         d.drawString(label, tx + tabW / 2, textY);
 
-        // Barra de progresso na base do tab
+        // Barra de progresso na base (apenas timers regressivos)
         if (active || done) {
             uint32_t total   = (uint32_t)timerMinutes[i] * 60000;
             uint32_t rem     = getRemaining(i);
@@ -649,63 +693,197 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         // Slot tabs — altura 20 px, fáceis de tocar
         drawSlotTabs(display, TIMER_ZONE_Y + 5);
 
-        int s = focusedSlot;
-        uint32_t remaining = getRemaining(s);
-
-        uint16_t timerColor = (timerStates[s] == TIMER_RUNNING) ? COLOR_TIMER_RUNNING
-                            : (timerStates[s] == TIMER_PAUSED)  ? COLOR_TIMER_PAUSED
-                            :                                      COLOR_TIMER_SETTING;
-        drawFocusedTimerLabel(display, s, TIMER_LABEL_Y, timerColor);
-        bool hasOtherSummary = drawOtherTimersSummary(display, s, TIMER_SUMMARY_Y);
-
-        char tBuf[12];
-        if (timerStates[s] == TIMER_SETTING) {
-            snprintf(tBuf, sizeof(tBuf), "%d min", timerMinutes[s]);
-        } else {
-            uint32_t mins = remaining / 60000;
-            uint32_t secs = (remaining / 1000) % 60;
-            snprintf(tBuf, sizeof(tBuf), "%02lu:%02lu", (unsigned long)mins, (unsigned long)secs);
-        }
-
-        // Ícone + texto centralizados como par (ícone em x=106, texto em x=204)
         const int timerY = TIMER_VALUE_Y;
         const int iconX  = display.width() / 2 - 54;  // 106
         const int textX  = display.width() / 2 + 44;  // 204
 
-        display.setFont(&fonts::FreeSansBold18pt7b);
-        display.setTextColor(timerColor, COLOR_BACKGROUND);
-        display.setTextDatum(MC_DATUM);
-        display.drawString(tBuf, textX, timerY);
+        int s = focusedSlot;
 
-        // Ícone play/pause
-        if (timerStates[s] == TIMER_RUNNING)
-            drawPauseIcon(display, iconX, timerY, timerColor);
-        else
-            drawPlayIcon(display, iconX, timerY, timerColor);
+        if (s == MAX_TIMERS) {
+            // ── Cronômetro ──────────────────────────────────────────────────
+            uint32_t elapsed = swGetElapsed();
+            uint16_t swColor = (g_swState == SW_RUNNING) ? COLOR_TIMER_RUNNING
+                             : (g_swState == SW_PAUSED)  ? COLOR_TIMER_PAUSED
+                             :                             COLOR_TIMER_SETTING;
 
-        if (timerStates[s] == TIMER_SETTING) {
-            // Setas cima/baixo indicam swipe vertical para ajustar minutos
-            drawUpArrow(display,   22,                    timerY - 12, COLOR_TEXT_SUBTLE);
-            drawDownArrow(display, 22,                    timerY + 12, COLOR_TEXT_SUBTLE);
-            drawUpArrow(display,   display.width() - 22,  timerY - 12, COLOR_TEXT_SUBTLE);
-            drawDownArrow(display, display.width() - 22,  timerY + 12, COLOR_TEXT_SUBTLE);
-            if (!hasOtherSummary) {
-                display.setFont(&fonts::FreeSans9pt7b);
-                display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-                display.setTextDatum(MC_DATUM);
-                display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+            display.setFont(&fonts::Font0);
+            display.setTextColor(swColor, COLOR_BACKGROUND);
+            display.setTextDatum(MC_DATUM);
+            display.drawString("SW · Cronometro", display.width() / 2, TIMER_LABEL_Y);
+
+            char swBuf[16];
+            uint32_t h  = elapsed / 3600000;
+            uint32_t m  = (elapsed / 60000) % 60;
+            uint32_t ss = (elapsed / 1000) % 60;
+            uint32_t cs = (elapsed / 10) % 100;  // centésimos (mostrado pausado)
+
+            if (g_swState == SW_RUNNING) {
+                // Rodando: mostra HH:MM:SS ou MM:SS limpo
+                if (h > 0)
+                    snprintf(swBuf, sizeof(swBuf), "%02lu:%02lu:%02lu",
+                             (unsigned long)h, (unsigned long)m, (unsigned long)ss);
+                else
+                    snprintf(swBuf, sizeof(swBuf), "%02lu:%02lu",
+                             (unsigned long)m, (unsigned long)ss);
+            } else {
+                // Parado/pausado: mostra MM:SS.cc para precisão
+                if (h > 0)
+                    snprintf(swBuf, sizeof(swBuf), "%lu:%02lu:%02lu",
+                             (unsigned long)h, (unsigned long)m, (unsigned long)ss);
+                else
+                    snprintf(swBuf, sizeof(swBuf), "%02lu:%02lu.%02lu",
+                             (unsigned long)m, (unsigned long)ss, (unsigned long)cs);
             }
-        } else if (timerStates[s] == TIMER_PAUSED) {
-            if (!hasOtherSummary) {
-                display.setFont(&fonts::FreeSans9pt7b);
-                display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-                display.setTextDatum(MC_DATUM);
+
+            display.setFont(&fonts::FreeSansBold18pt7b);
+            display.setTextColor(swColor, COLOR_BACKGROUND);
+            display.setTextDatum(MC_DATUM);
+            display.drawString(swBuf, textX, timerY);
+
+            if (g_swState == SW_RUNNING)
+                drawPauseIcon(display, iconX, timerY, swColor);
+            else
+                drawPlayIcon(display, iconX, timerY, swColor);
+
+            display.setFont(&fonts::FreeSans9pt7b);
+            display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+            display.setTextDatum(MC_DATUM);
+            if (g_swState == SW_IDLE)
+                display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+            else
                 display.drawString("Segurar: zerar", display.width() / 2, TIMER_HINT_Y);
+
+        } else {
+            // ── Timer regressivo ─────────────────────────────────────────────
+            uint32_t remaining = getRemaining(s);
+
+            uint16_t timerColor = (timerStates[s] == TIMER_RUNNING) ? COLOR_TIMER_RUNNING
+                                : (timerStates[s] == TIMER_PAUSED)  ? COLOR_TIMER_PAUSED
+                                :                                      COLOR_TIMER_SETTING;
+            drawFocusedTimerLabel(display, s, TIMER_LABEL_Y, timerColor);
+            bool hasOtherSummary = drawOtherTimersSummary(display, s, TIMER_SUMMARY_Y);
+
+            char tBuf[12];
+            if (timerStates[s] == TIMER_SETTING) {
+                snprintf(tBuf, sizeof(tBuf), "%d min", timerMinutes[s]);
+            } else {
+                uint32_t mins = remaining / 60000;
+                uint32_t secs = (remaining / 1000) % 60;
+                snprintf(tBuf, sizeof(tBuf), "%02lu:%02lu",
+                         (unsigned long)mins, (unsigned long)secs);
+            }
+
+            // Anel de progresso ao redor do ícone (RUNNING ou PAUSED)
+            if (timerStates[s] == TIMER_RUNNING || timerStates[s] == TIMER_PAUSED) {
+                uint32_t total = (uint32_t)timerMinutes[s] * 60000;
+                float    prog  = (total > 0) ? (float)(total - remaining) / (float)total : 0.0f;
+                // Fundo do anel (cinza escuro, círculo completo)
+                display.fillArc(iconX, timerY, 20, 26, 0.0f, 360.0f, 0x2104);
+                // Arco de progresso (de 0° = topo, sentido horário)
+                if (prog > 0.005f)
+                    display.fillArc(iconX, timerY, 20, 26, 0.0f, prog * 360.0f, timerColor);
+            }
+
+            display.setFont(&fonts::FreeSansBold18pt7b);
+            display.setTextColor(timerColor, COLOR_BACKGROUND);
+            display.setTextDatum(MC_DATUM);
+            display.drawString(tBuf, textX, timerY);
+
+            // Ícone play/pause
+            if (timerStates[s] == TIMER_RUNNING)
+                drawPauseIcon(display, iconX, timerY, timerColor);
+            else
+                drawPlayIcon(display, iconX, timerY, timerColor);
+
+            if (timerStates[s] == TIMER_SETTING) {
+                drawUpArrow(display,   22,                    timerY - 12, COLOR_TEXT_SUBTLE);
+                drawDownArrow(display, 22,                    timerY + 12, COLOR_TEXT_SUBTLE);
+                drawUpArrow(display,   display.width() - 22,  timerY - 12, COLOR_TEXT_SUBTLE);
+                drawDownArrow(display, display.width() - 22,  timerY + 12, COLOR_TEXT_SUBTLE);
+                if (!hasOtherSummary) {
+                    display.setFont(&fonts::FreeSans9pt7b);
+                    display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+                    display.setTextDatum(MC_DATUM);
+                    display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+                }
+            } else if (timerStates[s] == TIMER_PAUSED) {
+                if (!hasOtherSummary) {
+                    display.setFont(&fonts::FreeSans9pt7b);
+                    display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+                    display.setTextDatum(MC_DATUM);
+                    display.drawString("Segurar: zerar", display.width() / 2, TIMER_HINT_Y);
+                }
             }
         }
     }
 
     // --- Aviso de bateria + indicador de tela ---
     drawBatteryWarning(display, 218);
+    drawScreenIndicator(display, 0, SCREEN_COUNT);
+}
+
+// ── Modo ambiente em dim — relógio analógico minimalista ─────────────────────
+void screenHomeDrawAmbient(lgfx::LovyanGFX& display) {
+    display.fillScreen(COLOR_BACKGROUND);
+
+    struct tm t = {};
+    time_t now = time(nullptr);
+    bool timeOk = (now > 1577836800L) && (localtime_r(&now, &t) != nullptr);
+
+    const int cx = 160;
+    const int cy = 108;
+    const int R  = 82;   // raio do mostrador
+
+    // Contorno do mostrador
+    display.drawCircle(cx, cy, R,     COLOR_TEXT_PRIMARY);
+    display.drawCircle(cx, cy, R - 1, COLOR_TEXT_DIM);
+
+    // Marcas das horas (4 maiores nos quartos, 8 menores)
+    for (int i = 0; i < 12; i++) {
+        float a   = (i * 30.0f - 90.0f) * (float)M_PI / 180.0f;
+        float cs  = cosf(a), sn = sinf(a);
+        int   len = (i % 3 == 0) ? 10 : 5;
+        display.drawLine(
+            cx + (int)((R - len) * cs), cy + (int)((R - len) * sn),
+            cx + (int)(R * cs),         cy + (int)(R * sn),
+            (i % 3 == 0) ? COLOR_TEXT_PRIMARY : COLOR_TEXT_DIM
+        );
+    }
+
+    if (timeOk) {
+        int h = t.tm_hour, m = t.tm_min;
+
+        // Ponteiro dos minutos (fino, 2px, comprimento 68)
+        float mA = (m * 6.0f - 90.0f) * (float)M_PI / 180.0f;
+        int   mx = cx + (int)(68.0f * cosf(mA));
+        int   my = cy + (int)(68.0f * sinf(mA));
+        display.drawLine(cx,     cy,     mx,     my,     COLOR_TEXT_PRIMARY);
+        display.drawLine(cx + 1, cy,     mx + 1, my,     COLOR_TEXT_PRIMARY);
+
+        // Ponteiro das horas (espesso, 3px, comprimento 44)
+        float hA = ((h % 12) * 30.0f + m * 0.5f - 90.0f) * (float)M_PI / 180.0f;
+        int   hx = cx + (int)(44.0f * cosf(hA));
+        int   hy = cy + (int)(44.0f * sinf(hA));
+        for (int d = -1; d <= 1; d++) {
+            display.drawLine(cx + d, cy,     hx + d, hy,     COLOR_TEXT_PRIMARY);
+            display.drawLine(cx,     cy + d, hx,     hy + d, COLOR_TEXT_PRIMARY);
+        }
+    }
+
+    // Tampa central
+    display.fillCircle(cx, cy, 4, COLOR_TEXT_PRIMARY);
+
+    // Hora digital discreta abaixo do mostrador
+    display.setFont(&fonts::FreeSans9pt7b);
+    display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    display.setTextDatum(MC_DATUM);
+    if (timeOk) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
+        display.drawString(buf, cx, cy + R + 14);
+    } else {
+        display.drawString("--:--", cx, cy + R + 14);
+    }
+
     drawScreenIndicator(display, 0, SCREEN_COUNT);
 }

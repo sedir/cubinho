@@ -54,3 +54,14 @@ void         screenHomeSetTimerPersist(const TimerPersist& p);
 
 // Define o próximo evento a exibir na tela (item #24)
 void screenHomeSetNextEvent(const char* text);
+
+// Cronômetro (slot extra SW, índice MAX_TIMERS)
+void screenHomeStopwatchTap();
+void screenHomeStopwatchLongPress();
+bool screenHomeIsStopwatchRunning();
+
+// Total de slots UI: MAX_TIMERS timers + 1 cronômetro
+int screenHomeGetTotalSlots();
+
+// Modo ambiente em dim — relógio analógico minimalista
+void screenHomeDrawAmbient(lgfx::LovyanGFX& display);
