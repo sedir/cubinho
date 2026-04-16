@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: PlatformIO Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          restore-keys: ${{ runner.os }}-pio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Create config.h from example
+        run: cp src/config.h.example src/config.h
+
+      - name: Build
+        run: pio run
+
+      - name: Report binary size
+        run: |
+          BIN=.pio/build/m5stack-cores3/firmware.bin
+          SIZE=$(wc -c < "$BIN")
+          echo "## Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Artefato | Tamanho |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|---------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| firmware.bin | $(numfmt --to=iec $SIZE) |" >> "$GITHUB_STEP_SUMMARY"
+
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=warning,performance,portability \
+            --suppress=missingIncludeSystem \
+            --suppress=missingInclude \
+            --error-exitcode=1 \
+            src/
+
+  config-sentinel:
+    name: Config Sentinel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure config.h is not committed
+        run: |
+          if git show HEAD:src/config.h 2>/dev/null; then
+            echo "ERRO: src/config.h não deve ser commitado (contém credenciais/coordenadas)"
+            exit 1
+          fi
+          echo "OK: src/config.h não está no repositório"
+
+      - name: Validate config.h.example defines
+        run: |
+          required=(
+            WIFI_KEEP_ALIVE
+            GEO_LATITUDE
+            GEO_LONGITUDE
+            TIMEZONE_OFFSET_SEC
+            CITY_NAME
+            NTP_SERVER_1
+            COMFORT_TEMP_MIN
+            COMFORT_TEMP_MAX
+          )
+          fail=0
+          for define in "${required[@]}"; do
+            if ! grep -q "#define $define" src/config.h.example; then
+              echo "ERRO: #define $define ausente em config.h.example"
+              fail=1
+            fi
+          done
+          exit $fail
