@@ -8,6 +8,11 @@
 // ── Estados ──────────────────────────────────────────────────────────────────
 enum PowerState { POWER_ACTIVE, POWER_DIM };
 
+// ── CPU boost para interações e animações ────────────────────────────────────
+static esp_pm_lock_handle_t _cpuBoostLock   = NULL;
+static uint32_t             _cpuBoostUntilMs = 0;
+#define CPU_BOOST_DURATION_MS 500   // cobre animação (~190ms) + renders pós-toque
+
 static PowerState _powerState  = POWER_ACTIVE;
 static uint32_t   _lastTouchMs = 0;
 
@@ -30,7 +35,6 @@ static bool     _autoBrightnessEn   = AUTO_BRIGHTNESS_ENABLED;
 static bool    _alsInitialized      = false;
 static uint8_t _currentBrightness   = BRIGHTNESS_ACTIVE;
 static uint8_t _targetBrightness    = BRIGHTNESS_ACTIVE;
-static uint8_t _brightnessBeforeDim = BRIGHTNESS_ACTIVE;  // salvo antes do dim
 static uint32_t _lastFadeMs         = 0;
 
 static uint8_t clampBrightness(int brightness) {
@@ -141,19 +145,41 @@ void powerInit() {
     _targetBrightness  = clampBrightness(_brightnessActiveRt);
     M5.Display.setBrightness(_brightnessActiveRt);
     alsInit();
+
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "cpu_boost", &_cpuBoostLock) != ESP_OK) {
+        _cpuBoostLock = NULL;
+        LOG_W("power", "CPU boost lock nao criado");
+    }
 }
 
 void powerOnTouch() {
     _lastTouchMs = millis();
     if (_powerState == POWER_DIM) {
         _powerState = POWER_ACTIVE;
-        // Restaura brilho salvo antes do dim, mas respeita o limite ativo configurado
-        _targetBrightness = clampBrightness(min((int)_brightnessBeforeDim, _brightnessActiveRt));
+        // Restaura sempre para o brilho ativo configurado.
+        // Usar _brightnessBeforeDim causava brilho baixo porque o auto-brilho
+        // pode ter rebaixado _currentBrightness antes do dim ser trigado,
+        // e esse valor baixo seria usado como alvo de restauração.
+        _targetBrightness = clampBrightness(_brightnessActiveRt);
         LOG_I("power", "Display restaurado — ACTIVE (fade)");
     }
 }
 
+void powerBoostCpu() {
+    if (!_cpuBoostLock) return;
+    if (_cpuBoostUntilMs == 0) {
+        esp_pm_lock_acquire(_cpuBoostLock);
+    }
+    _cpuBoostUntilMs = millis() + CPU_BOOST_DURATION_MS;
+}
+
 void powerUpdate(bool keepAwake) {
+    // Libera boost de CPU quando o timer expirar
+    if (_cpuBoostLock && _cpuBoostUntilMs > 0 && millis() >= _cpuBoostUntilMs) {
+        esp_pm_lock_release(_cpuBoostLock);
+        _cpuBoostUntilMs = 0;
+    }
+
     int pct = batteryPercent();
     powerBatteryTick();
 
@@ -162,7 +188,7 @@ void powerUpdate(bool keepAwake) {
         _lastTouchMs = millis();
         if (_powerState == POWER_DIM) {
             _powerState = POWER_ACTIVE;
-            _targetBrightness = _brightnessBeforeDim;
+            _targetBrightness = clampBrightness(_brightnessActiveRt);
             LOG_I("power", "Alarme ativo — restaurando display");
         }
         applyBrightnessFade();
@@ -174,7 +200,6 @@ void powerUpdate(bool keepAwake) {
     // Bateria critica: dim após timeout normal
     if (pct >= 0 && pct <= 10 && _powerState == POWER_ACTIVE) {
         if (millis() - _lastTouchMs > _dimTimeoutMs) {
-            _brightnessBeforeDim = _currentBrightness;
             _powerState = POWER_DIM;
             _targetBrightness = dimTarget;  // fade suave até dim
             LOG_I("power", "Bateria <= 10%% — dim (fade)");
@@ -187,7 +212,6 @@ void powerUpdate(bool keepAwake) {
     // Dim por inatividade
     if (_powerState == POWER_ACTIVE &&
         (millis() - _lastTouchMs > _dimTimeoutMs)) {
-        _brightnessBeforeDim = _currentBrightness;
         _powerState = POWER_DIM;
         _targetBrightness = dimTarget;  // fade suave até dim
         LOG_I("power", "Inatividade — display em dim (fade)");

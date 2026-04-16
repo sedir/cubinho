@@ -14,6 +14,10 @@ void powerUpdate(bool keepAwake = false);
 // Retorna true se o display está em modo dim.
 bool powerIsDim();
 
+// Solicita CPU a 240 MHz por ~500 ms (cobre animações e resposta ao toque).
+// Libera automaticamente via powerUpdate(). Seguro chamar repetidamente.
+void powerBoostCpu();
+
 // Retorna nível de bateria em % (0–100), ou -1 se não disponível.
 int batteryPercent();
 

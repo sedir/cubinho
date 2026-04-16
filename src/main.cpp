@@ -183,6 +183,7 @@ static void drawCurrentScreen(lgfx::LovyanGFX& target) {
 }
 
 static void animateTransition(int fromScreen, int toScreen, int direction) {
+    powerBoostCpu();  // 240 MHz durante a animação
     if (!canvas || !transSprite) {
         LOG_W("main", "animateTransition: sprite indisponivel — troca instantânea");
         currentScreen = toScreen;
@@ -506,6 +507,7 @@ void loop() {
         touchStartY       = touch.y;
         touchStartMs      = millis();
         powerOnTouch();
+        powerBoostCpu();  // 240 MHz desde o primeiro toque para resposta rápida
         if (touchStartedInDim) needsRedraw = true;
     }
 
@@ -723,8 +725,8 @@ void loop() {
         needsRedraw = true;
     }
 
-    // ── Comandos por voz — always-on poll ────────────────────────────────────
-    if (voiceCmdIsEnabled()) {
+    // ── Comandos por voz — suspende em dim para não drenar mic continuamente ──
+    if (voiceCmdIsEnabled() && !powerIsDim()) {
         VoiceCommand vcmd = voiceCmdUpdate();
 
         // Overlay visível durante LISTENING → precisa redesenhar a cada frame

@@ -11,7 +11,7 @@ inline void drawSplash(lgfx::LovyanGFX &display)
     display.setFont(&fonts::FreeSansBold18pt7b);
     display.setTextColor(0xFD20, TFT_BLACK); // laranja
     display.setTextDatum(MC_DATUM);
-    display.drawString("Kitchen", display.width() / 2, 72);
+    display.drawString("Cubinho", display.width() / 2, 72);
     display.drawString("Dashboard", display.width() / 2, 108);
 
     // Linha separadora
@@ -23,9 +23,9 @@ inline void drawSplash(lgfx::LovyanGFX &display)
     display.drawString("Inicializando...", display.width() / 2, 155);
 
     // Rodapé
-    display.setFont(&fonts::FreeSans12pt7b);
+    display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(0xDEDB, TFT_BLACK); // off-white
-    display.drawString("by Sedir Morais", display.width() / 2, 210);
+    display.drawString("Criado por Sedir Morais", display.width() / 2, 210);
 }
 
 // Atualiza a mensagem de status e barra de progresso na splash.
