@@ -23,6 +23,12 @@ struct WeatherData {
     float uvIndexMax;   // UV index máximo do dia (NaN = sem dado)
     bool  valid;
 
+    // Previsão diária 7 dias (índice 0 = hoje)
+    float   dailyTempMax[7];
+    float   dailyTempMin[7];
+    int     dailyCode[7];
+    uint8_t dailyCount;  // dias válidos (0–7)
+
     // Histórico de temperatura para sparkline (#17)
     float trendTemp[TREND_SAMPLES];
     uint8_t trendCount;     // amostras válidas (0–48)

@@ -146,6 +146,62 @@ static void drawMiniWeatherIcon(lgfx::LovyanGFX &d, int code, int cx, int cy)
     }
 }
 
+// ── Faixa de previsão 7 dias ─────────────────────────────────────────────────
+static const char* WDAY_ABR[] = { "Dom","Seg","Ter","Qua","Qui","Sex","Sab" };
+
+static void drawSevenDayForecast(lgfx::LovyanGFX& d, const WeatherData& data, int y)
+{
+    if (data.dailyCount < 2) return;
+
+    struct tm t = {};
+    time_t now  = time(nullptr);
+    int todayWday = 0;
+    if (now > 0 && localtime_r(&now, &t) != nullptr)
+        todayWday = t.tm_wday;
+
+    const int N      = min((int)data.dailyCount, 7);
+    const int COL_W  = 44;
+    const int startX = (d.width() - N * COL_W) / 2;
+
+    for (int i = 0; i < N; i++) {
+        int cx   = startX + i * COL_W + COL_W / 2;
+        int wday = (todayWday + i) % 7;
+        bool today = (i == 0);
+
+        // Destaque leve no dia de hoje
+        if (today)
+            d.fillRoundRect(startX + i * COL_W, y, COL_W - 1, 34, 3, 0x1082);
+
+        uint16_t bgColor = today ? 0x1082 : COLOR_BACKGROUND;
+
+        // Nome do dia
+        d.setFont(&fonts::Font0);
+        d.setTextDatum(TC_DATUM);
+        d.setTextColor(today ? COLOR_TEXT_PRIMARY : COLOR_TEXT_DIM, bgColor);
+        d.drawString(WDAY_ABR[wday], cx, y + 2);
+
+        // Mini ícone do clima
+        drawMiniWeatherIcon(d, data.dailyCode[i], cx, y + 14);
+
+        // Temp máxima (cor de conforto)
+        char buf[6];
+        snprintf(buf, sizeof(buf), "%.0f", data.dailyTempMax[i]);
+        d.setTextDatum(TC_DATUM);
+        // tempColor ainda não está declarado aqui — definido depois; usamos inline
+        float mx = data.dailyTempMax[i];
+        uint16_t mxCol = (mx < COMFORT_TEMP_MIN) ? COLOR_TEMP_COLD
+                       : (mx > COMFORT_TEMP_MAX) ? COLOR_TEMP_HOT
+                       :                           COLOR_TEMP_COMFORT;
+        d.setTextColor(mxCol, bgColor);
+        d.drawString(buf, cx, y + 22);
+
+        // Temp mínima (sempre fria/neutra)
+        snprintf(buf, sizeof(buf), "%.0f", data.dailyTempMin[i]);
+        d.setTextColor(COLOR_TEMP_COLD, bgColor);
+        d.drawString(buf, cx, y + 30);
+    }
+}
+
 // ── Cor de temperatura ───────────────────────────────────────────────────────
 static uint16_t tempColor(float t)
 {
@@ -353,15 +409,15 @@ static void drawHourlyChart(lgfx::LovyanGFX &d, const WeatherData &data)
     if (N < 2)
         return;
 
-    // Geometria do gráfico
+    // Geometria do gráfico (deslocado para baixo da faixa de 7 dias)
     const int CX    = 10;                  // margem esquerda
     const int CW    = d.width() - 20;      // 300px
-    const int CT    = 132;                 // topo da área de temperatura
-    const int CB    = 196;                 // base da área de temperatura
-    const int CH    = CB - CT;             // 64px de altura
-    const int PR_Y  = 198;                 // topo das barras de precipitação
-    const int PR_H  = 10;                  // altura máxima das barras
-    const int LBL_Y = 211;                 // y das labels de hora
+    const int CT    = 155;                 // topo da área de temperatura
+    const int CB    = 210;                 // base da área de temperatura
+    const int CH    = CB - CT;             // 55px de altura
+    const int PR_Y  = 212;                 // topo das barras de precipitação
+    const int PR_H  = 7;                   // altura máxima das barras
+    const int LBL_Y = 221;                 // y das labels de hora
 
     // ── Faixa de temperatura (sempre inclui a zona de conforto) ─────────────
     float tmin = data.hourlyTemp[0], tmax = data.hourlyTemp[0];
@@ -481,7 +537,6 @@ static void drawHourlyChart(lgfx::LovyanGFX &d, const WeatherData &data)
 void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool fetching)
 {
     display.fillScreen(COLOR_BACKGROUND);
-    char rainSummary[40];
 
     display.setFont(&fonts::FreeSans9pt7b);
     display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
@@ -516,6 +571,7 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
     display.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
     drawWrappedCenteredText(display, data.description, LEFT_CX, 82, 132, 18, 2);
 
+    char rainSummary[40];
     bool hasUpcomingRain = buildRainSummary(data, rainSummary, sizeof(rainSummary));
 
     // Separador vertical entre colunas
@@ -572,13 +628,17 @@ void screenWeatherDraw(lgfx::LovyanGFX &display, const WeatherData &data, bool f
     // Divisor horizontal
     display.drawFastHLine(10, 110, display.width() - 20, COLOR_DIVIDER);
 
-    // Resumo curto da previsão no espaço abaixo da divisória
-    display.setFont(&fonts::Font0);
-    display.setTextColor((isRainCode(data.weatherCode) || hasUpcomingRain) ? COLOR_TEXT_ACCENT
-                                                                           : COLOR_TEXT_DIM,
-                         COLOR_BACKGROUND);
-    display.setTextDatum(MC_DATUM);
-    display.drawString(rainSummary, display.width() / 2, 122);
+    // Faixa de previsão 7 dias (y=113, altura=34px)
+    if (data.dailyCount >= 2) {
+        drawSevenDayForecast(display, data, 113);
+    } else {
+        // Fallback: resumo de chuva quando não há dados diários
+        display.setFont(&fonts::Font0);
+        display.setTextColor((isRainCode(data.weatherCode) || hasUpcomingRain)
+                             ? COLOR_TEXT_ACCENT : COLOR_TEXT_DIM, COLOR_BACKGROUND);
+        display.setTextDatum(MC_DATUM);
+        display.drawString(rainSummary, display.width() / 2, 122);
+    }
 
     // Gráfico horário: sparkline + banda de conforto + precipitação
     drawHourlyChart(display, data);
