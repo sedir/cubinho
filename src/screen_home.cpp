@@ -276,8 +276,8 @@ static void drawFocusedTimerLabel(lgfx::LovyanGFX& d, int slot, int y, uint16_t 
 
 static const int TIMER_LABEL_Y   = 148;
 static const int TIMER_VALUE_Y   = 176;
-static const int TIMER_HINT_Y    = 206;
-static const int TIMER_SUMMARY_Y = 198;
+static const int TIMER_HINT_Y    = 210;
+static const int TIMER_SUMMARY_Y = 210;
 
 // ── Teclado on-screen ────────────────────────────────────────────────────────
 static bool keyboardActive = false;
