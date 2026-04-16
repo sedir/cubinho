@@ -14,7 +14,7 @@
 #define COLOR_BACKGROUND     TFT_BLACK
 
 // Temperatura
-#define COLOR_TEMP_COLD      0x001F  // azul
+#define COLOR_TEMP_COLD      0x867F  // azul gelo claro (≈ RGB 132, 206, 255)
 #define COLOR_TEMP_HOT       TFT_RED
 #define COLOR_TEMP_COMFORT   TFT_GREEN
 

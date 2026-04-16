@@ -28,7 +28,6 @@ const char* wmoToDescription(int code) {
 bool weatherFetch(WeatherData& out) {
     float prevTemp = out.valid ? out.tempCurrent : NAN;
 
-    // forecast_days=2 para suportar wrap de horas além de 23h (fix #5)
     char url[320];
     snprintf(url, sizeof(url),
         "https://api.open-meteo.com/v1/forecast"
@@ -36,7 +35,7 @@ bool weatherFetch(WeatherData& out) {
         "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,windspeed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,weather_code,uv_index_max"
         "&hourly=temperature_2m,weather_code,precipitation_probability"
-        "&timezone=auto&forecast_days=2",
+        "&timezone=auto&forecast_days=7",
         GEO_LATITUDE, GEO_LONGITUDE);
 
     WiFiClientSecure client;
@@ -65,9 +64,10 @@ bool weatherFetch(WeatherData& out) {
     filter["current"]["apparent_temperature"] = true;
     filter["current"]["relative_humidity_2m"] = true;
     filter["current"]["weather_code"] = true;
-    filter["daily"]["temperature_2m_max"][0] = true;
-    filter["daily"]["temperature_2m_min"][0] = true;
-    filter["daily"]["uv_index_max"][0] = true;
+    filter["daily"]["temperature_2m_max"] = true;
+    filter["daily"]["temperature_2m_min"] = true;
+    filter["daily"]["weather_code"]       = true;
+    filter["daily"]["uv_index_max"]       = true;
     filter["hourly"]["temperature_2m"] = true;
     filter["hourly"]["weather_code"] = true;
     filter["hourly"]["precipitation_probability"] = true;
@@ -96,12 +96,25 @@ bool weatherFetch(WeatherData& out) {
                            : doc["current"]["apparent_temperature"].as<float>();
     out.humidity     = doc["current"]["relative_humidity_2m"].as<float>();
     out.weatherCode  = doc["current"]["weather_code"].as<int>();
-    out.tempMax      = doc["daily"]["temperature_2m_max"][0].as<float>();
-    out.tempMin      = doc["daily"]["temperature_2m_min"][0].as<float>();
-    out.uvIndexMax   = doc["daily"]["uv_index_max"][0].isNull()
-                           ? NAN
-                           : doc["daily"]["uv_index_max"][0].as<float>();
-    out.valid        = true;
+    // Previsão diária 7 dias
+    {
+        JsonArray dMax  = doc["daily"]["temperature_2m_max"];
+        JsonArray dMin  = doc["daily"]["temperature_2m_min"];
+        JsonArray dCode = doc["daily"]["weather_code"];
+        int n = min((int)dMax.size(), 7);
+        out.dailyCount = (uint8_t)n;
+        for (int i = 0; i < n; i++) {
+            out.dailyTempMax[i] = dMax[i].as<float>();
+            out.dailyTempMin[i] = dMin[i].as<float>();
+            out.dailyCode[i]    = dCode[i].as<int>();
+        }
+    }
+    out.tempMax    = out.dailyCount > 0 ? out.dailyTempMax[0] : NAN;
+    out.tempMin    = out.dailyCount > 0 ? out.dailyTempMin[0] : NAN;
+    out.uvIndexMax = doc["daily"]["uv_index_max"][0].isNull()
+                         ? NAN
+                         : doc["daily"]["uv_index_max"][0].as<float>();
+    out.valid      = true;
 
     strncpy(out.description, wmoToDescription(out.weatherCode), sizeof(out.description) - 1);
     out.description[sizeof(out.description) - 1] = '\0';
@@ -122,7 +135,7 @@ bool weatherFetch(WeatherData& out) {
     JsonArray hourlyTemps = doc["hourly"]["temperature_2m"];
     JsonArray hourlyCodes = doc["hourly"]["weather_code"];
     JsonArray hourlyPrecip = doc["hourly"]["precipitation_probability"];
-    int available = min((int)hourlyTemps.size(), 48);
+    int available = (int)hourlyTemps.size();  // com forecast_days=7 são 168 entradas; o loop já limita a 48h
     out.hourlyCount = 0;
 
     for (int i = 0; i < min(available - startHour, 48); i++) {
