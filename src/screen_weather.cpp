@@ -412,12 +412,12 @@ static void drawHourlyChart(lgfx::LovyanGFX &d, const WeatherData &data)
     // Geometria do gráfico (deslocado para baixo da faixa de 7 dias)
     const int CX    = 10;                  // margem esquerda
     const int CW    = d.width() - 20;      // 300px
-    const int CT    = 155;                 // topo da área de temperatura
-    const int CB    = 210;                 // base da área de temperatura
-    const int CH    = CB - CT;             // 55px de altura
-    const int PR_Y  = 212;                 // topo das barras de precipitação
-    const int PR_H  = 7;                   // altura máxima das barras
-    const int LBL_Y = 221;                 // y das labels de hora
+    const int CT    = 150;                 // topo da área de temperatura
+    const int CB    = 207;                 // base da área de temperatura
+    const int CH    = CB - CT;             // 57px de altura
+    const int PR_Y  = 209;                 // topo das barras de precipitação
+    const int PR_H  = 6;                   // altura máxima das barras
+    const int LBL_Y = 217;                 // y das labels de hora
 
     // ── Faixa de temperatura (sempre inclui a zona de conforto) ─────────────
     float tmin = data.hourlyTemp[0], tmax = data.hourlyTemp[0];
