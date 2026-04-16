@@ -813,11 +813,14 @@ void loop() {
     ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
 
     // ── Scroll suave das configurações (lerp ease-out) ──
+    bool scrollAnimating = false;
     if (currentScreen == 3) {
         float diff = (float)g_settingsScrollTarget - g_settingsScrollAnim;
         if (fabsf(diff) > 0.5f) {
             g_settingsScrollAnim += diff * 0.22f;
             needsRedraw = true;
+            scrollAnimating = true;
+            powerBoostCpu();  // mantém 240 MHz durante toda a animação de scroll
         } else {
             g_settingsScrollAnim = (float)g_settingsScrollTarget;
         }
@@ -835,5 +838,7 @@ void loop() {
         needsRedraw = false;
     }
 
-    delay(alarmActive ? 20 : 50);
+    // Durante animação de scroll: 16ms (~60fps) para suavidade máxima.
+    // Alarme: 20ms para piscar sincronizado. Normal: 50ms (~20fps é suficiente).
+    delay(scrollAnimating ? 16 : (alarmActive ? 20 : 50));
 }
