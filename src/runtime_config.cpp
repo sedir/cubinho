@@ -24,6 +24,9 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     cfg.accelWake           = _prefs.getBool("accelWake",  ACCEL_WAKE_ENABLED);
     cfg.voiceEnabled        = _prefs.getBool("voiceEn",    false);
     cfg.nightMode           = _prefs.getBool("nightMode",  false);
+    cfg.alarmEnabled        = _prefs.getBool("alarmEn",    false);
+    cfg.alarmHour           = _prefs.getInt ("alarmH",     7);
+    cfg.alarmMinute         = _prefs.getInt ("alarmM",     0);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
@@ -45,6 +48,9 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
     _prefs.putBool("accelWake",  cfg.accelWake);
     _prefs.putBool("voiceEn",    cfg.voiceEnabled);
     _prefs.putBool("nightMode",  cfg.nightMode);
+    _prefs.putBool("alarmEn",    cfg.alarmEnabled);
+    _prefs.putInt ("alarmH",     cfg.alarmHour);
+    _prefs.putInt ("alarmM",     cfg.alarmMinute);
     for (int i = 0; i < MAX_TIMERS; i++) {
         char key[12];
         snprintf(key, sizeof(key), "tLabel%d", i);
