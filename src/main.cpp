@@ -23,6 +23,7 @@
 #include "chime_wav.h"
 #include "qr_scanner.h"
 #include "voice_cmd.h"
+#include "alarm_manager.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
@@ -53,6 +54,7 @@ RTC_DATA_ATTR static uint32_t    rtcTimerRemain[MAX_TIMERS]  = { 300000, 600000,
 RTC_DATA_ATTR static int         rtcTimerFocused = 0;
 RTC_DATA_ATTR static char        rtcTimerCustomName[MAX_TIMERS][16] = {};
 RTC_DATA_ATTR static bool        rtcTimerHasCustomName[MAX_TIMERS]  = {};
+RTC_DATA_ATTR static AlarmPersist rtcAlarmPersist = {};
 
 // ── Estado volátil ───────────────────────────────────────────────────────────
 static int         currentScreen  = 0;
@@ -170,6 +172,12 @@ static void pushFrame() {
 
 // ── Transição animada entre telas (item #25) ─────────────────────────────────
 static void drawCurrentScreen(lgfx::LovyanGFX& target) {
+    // Overlay de alarme tocando tem prioridade total sobre qualquer tela
+    if (alarmIsRinging()) {
+        alarmDrawRingingOverlay(target);
+        return;
+    }
+
     switch (currentScreen) {
         case 0:
             if (powerIsDim()) screenHomeDrawAmbient(target);
@@ -179,9 +187,12 @@ static void drawCurrentScreen(lgfx::LovyanGFX& target) {
         case 2: screenSystemDraw(target, rtcBootCount); break;
         case 3: screenSettingsDraw(target, g_runtimeCfg, (int)g_settingsScrollAnim); break;
     }
-    // Ícone de status de voz no canto superior esquerdo (IDLE ou LISTENING)
+    // Picker do alarme sobrepõe a tela de configurações
+    if (alarmPickerIsOpen()) {
+        alarmPickerDraw(target);
+        return;
+    }
     voiceCmdDrawStatusIcon(target);
-    // Overlay completo apenas durante a janela de classificação
     if (voiceCmdGetState() == VSTATE_LISTENING) voiceCmdDrawOverlay(target);
 }
 
@@ -379,8 +390,9 @@ void setup() {
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
-    runtimeConfigApply(g_runtimeCfg);  // aplica tudo, inclusive voiceCmdSetEnabled
+    runtimeConfigApply(g_runtimeCfg);
     voiceCmdInit(g_runtimeCfg.voiceEnabled);
+    alarmSetPersist(rtcAlarmPersist);  // restaura estado do alarme antes de qualquer wake check
 
     #undef SPLASH
 
@@ -395,17 +407,33 @@ void setup() {
         weatherData = rtcWeather;
         wifiConnectAndFetch(weatherData);
         rtcWeather = weatherData;
+
+        // Verifica alarme antes de voltar a dormir
+        alarmCheck(g_runtimeCfg);
+        if (!alarmIsRinging()) {
+            alarmGetPersist(rtcAlarmPersist);
+            rtcBootCount++;
+            int64_t secsAlarm = alarmSecondsUntilNext(g_runtimeCfg);
+            uint64_t maxMs = (secsAlarm > 0 && secsAlarm < 86400LL)
+                           ? (uint64_t)secsAlarm * 1000ULL : 0;
+            LOG_I("main", "Alarme em %llds — sleep max=%llums", secsAlarm, maxMs);
+            powerEnterDeepSleep(maxMs);
+            return;
+        }
+        // Alarme disparou — acorda completamente (display + loop normal)
+        LOG_I("main", "Alarme detectado no wake do timer — acorda completamente");
         rtcBootCount++;
-        powerEnterDeepSleep();
-        return;
+        // isTouchWake=false, mas o path de wake por toque é o mais adequado:
+        // restaura timers e inicia WiFi async
     }
 
-    // ── Cold boot ou wake por toque ──
-    currentScreen = rtcScreen;
+    // ── Cold boot, wake por toque, ou wake do timer com alarme ──
+    bool isAlarmWake = alarmIsRinging();  // true quando timer wake detectou alarme
+    currentScreen = isAlarmWake ? 0 : rtcScreen;
     weatherData   = rtcWeather;
 
-    if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
-        LOG_I("main", "Wake por toque — restaurando estado");
+    if (!isColdBoot && (isTouchWake || isAlarmWake) && rtcBootCount > 0) {
+        LOG_I("main", isAlarmWake ? "Wake por alarme" : "Wake por toque — restaurando estado");
         TimerPersist tp;
         tp.focused = rtcTimerFocused;
         for (int i = 0; i < MAX_TIMERS; i++) {
@@ -417,6 +445,7 @@ void setup() {
         }
         screenHomeSetTimerPersist(tp);
         wifiBeginAsync(weatherData);
+        if (isAlarmWake) powerOnTouch();  // acende o display
     } else {
         LOG_I("main", "Boot inicial — splash + init completo");
         // Callback para atualizar splash durante o wifiInit
@@ -461,6 +490,7 @@ void loop() {
     static bool lastCalendarConfigMode = false;
 
     M5.update();
+    alarmCheck(g_runtimeCfg);
     telnetLogUpdate();
     wifiPortalUpdate();   // item #23
     otaUpdate();          // item #21
@@ -515,7 +545,7 @@ void loop() {
         if (touchStartedInDim) needsRedraw = true;
     }
 
-    bool timerOrAlarm = screenHomeIsTimerActive() || screenHomeIsAlarmActive();
+    bool timerOrAlarm = screenHomeIsTimerActive() || screenHomeIsAlarmActive() || alarmIsRinging();
     if (touch.wasReleased() && (!touchStartedInDim || timerOrAlarm)) {
         uint32_t held        = millis() - touchStartMs;
         bool     longPress   = (held >= 800);
@@ -523,8 +553,23 @@ void loop() {
         int      swipeDeltaY = touch.y - touchStartY;
         bool     isSwipe     = (abs(swipeDeltaX) >= 30 && abs(swipeDeltaX) > abs(swipeDeltaY));
 
+        // Picker do alarme intercepta todos os toques quando ativo
+        if (alarmPickerIsOpen()) {
+            int outH, outM;
+            if (alarmPickerHandleTap(touchStartX, touchStartY, outH, outM)) {
+                g_runtimeCfg.alarmHour   = outH;
+                g_runtimeCfg.alarmMinute = outM;
+                runtimeConfigSave(g_runtimeCfg);
+                LOG_I("main", "Alarme configurado: %02d:%02d", outH, outM);
+            }
+            needsRedraw = true;
+        } else if (alarmIsRinging()) {
+            // Metade esquerda = soneca; metade direita = dispensar
+            if (touchStartX < 160) alarmSnooze();
+            else                   alarmDismiss();
+            needsRedraw = true;
         // Teclado on-screen intercepta todos os toques quando ativo
-        if (currentScreen == 0 && screenHomeIsKeyboardActive()) {
+        } else if (currentScreen == 0 && screenHomeIsKeyboardActive()) {
             screenHomeKeyboardHandleTouch(touchStartX, touchStartY);
             needsRedraw = true;
         } else if (currentScreen == 0 && screenHomeIsAlarmActive()) {
@@ -700,7 +745,8 @@ void loop() {
 
     // ── Dim ──
     bool wasDim = powerIsDim();
-    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() || screenHomeIsStopwatchRunning());
+    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() ||
+                screenHomeIsStopwatchRunning() || alarmIsRinging());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ──
@@ -716,7 +762,8 @@ void loop() {
 
     // ── Deep sleep ──
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
-        !screenHomeIsStopwatchRunning() && powerShouldDeepSleep()) {
+        !screenHomeIsStopwatchRunning() && !alarmIsRinging() && !alarmIsSnoozed() &&
+        powerShouldDeepSleep()) {
 
         LOG_I("main", "Deep sleep — salvando estado");
         rtcScreen  = currentScreen;
@@ -733,7 +780,12 @@ void loop() {
         }
 
         ledOff();
-        powerEnterDeepSleep();
+        alarmGetPersist(rtcAlarmPersist);
+        int64_t secsAlarm = alarmSecondsUntilNext(g_runtimeCfg);
+        uint64_t maxMs = (secsAlarm > 0 && secsAlarm < 86400LL)
+                       ? (uint64_t)secsAlarm * 1000ULL : 0;
+        LOG_I("main", "Alarme em %llds — sleep max=%llums", secsAlarm, maxMs);
+        powerEnterDeepSleep(maxMs);
         return;
     }
 
@@ -797,13 +849,13 @@ void loop() {
         }
     }
 
-    // ── Alarme sonoro ──
+    // ── Alarme sonoro (timers de cozinha) ──
     bool alarmActive = screenHomeIsAlarmActive();
     if (alarmActive) {
         if (!alarmWasActive) {
-            M5.Speaker.setVolume(160);  // mais alto que a UI
-            lastBeepMs = 0;             // dispara o primeiro chime imediatamente
-            voiceCmdSuspend();          // mic conflita com o speaker; suspende durante alarme
+            M5.Speaker.setVolume(160);
+            lastBeepMs = 0;
+            voiceCmdSuspend();
         }
         uint32_t now = millis();
         if (now - lastBeepMs >= 3200) {
@@ -814,11 +866,39 @@ void loop() {
             needsRedraw = true;
     } else if (alarmWasActive) {
         M5.Speaker.stop();
-        M5.Speaker.setVolume(85);  // restaura volume de UI
-        voiceCmdResume();           // agenda reinício do mic após delay
-        LOG_I("main", "Alarme encerrado");
+        M5.Speaker.setVolume(85);
+        voiceCmdResume();
+        LOG_I("main", "Alarme de timer encerrado");
     }
     alarmWasActive = alarmActive;
+
+    // ── Alarme de despertar ──
+    static bool     wakeAlarmWasRinging = false;
+    static uint32_t wakeAlarmLastBeepMs = 0;
+    bool wakeAlarmRinging = alarmIsRinging();
+    if (wakeAlarmRinging) {
+        if (!wakeAlarmWasRinging) {
+            M5.Speaker.setVolume(160);
+            wakeAlarmLastBeepMs = 0;
+            voiceCmdSuspend();
+            if (powerIsDim()) powerOnTouch();  // acorda a tela
+        }
+        uint32_t now = millis();
+        if (now - wakeAlarmLastBeepMs >= 3200) {
+            M5.Speaker.playWav(CHIME_WAV, CHIME_WAV_LEN);
+            wakeAlarmLastBeepMs = now;
+        }
+        if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0))
+            needsRedraw = true;
+    } else if (wakeAlarmWasRinging) {
+        if (!alarmActive) {
+            M5.Speaker.stop();
+            M5.Speaker.setVolume(85);
+            voiceCmdResume();
+        }
+        LOG_I("main", "Alarme de despertar encerrado");
+    }
+    wakeAlarmWasRinging = wakeAlarmRinging;
 
     // ── Log periódico ──
     logSensorStatus();
@@ -854,7 +934,8 @@ void loop() {
 
     uint32_t now = millis();
     uint32_t refreshRate = (currentScreen == 0) ? 1000u : 5000u;
-    bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400u : refreshRate));
+    bool anyAlarm = alarmActive || alarmIsRinging();
+    bool timeToRefresh = (now - lastDrawMs >= (anyAlarm ? 400u : refreshRate));
     if (needsRedraw || timeToRefresh) {
         drawCurrentScreen(*fb);
         pushFrame();
@@ -864,5 +945,5 @@ void loop() {
 
     // Durante animação de scroll: 16ms (~60fps) para suavidade máxima.
     // Alarme: 20ms para piscar sincronizado. Normal: 50ms (~20fps é suficiente).
-    delay(scrollAnimating ? 16 : (alarmActive ? 20 : 50));
+    delay(scrollAnimating ? 16 : (anyAlarm ? 20 : 50));
 }

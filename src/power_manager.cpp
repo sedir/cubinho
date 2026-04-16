@@ -233,7 +233,7 @@ bool powerShouldDeepSleep() {
     return (millis() - _lastTouchMs) > _deepSleepTimeoutMs;
 }
 
-void powerEnterDeepSleep() {
+void powerEnterDeepSleep(uint64_t maxSleepMs) {
     M5.Speaker.stop();
     M5.Display.setBrightness(0);
     WiFi.disconnect(true);
@@ -243,13 +243,17 @@ void powerEnterDeepSleep() {
     esp_sleep_enable_ext0_wakeup((gpio_num_t)DEEP_SLEEP_WAKEUP_GPIO, 0);
 
     // Compensa o tempo de boot + fetch (~5s) para evitar drift acumulado ao longo do dia.
-    // Sem compensação: cada ciclo de 30 min perde ~5s → ~4h de skew em 30 dias.
-    constexpr uint64_t kBootCompensationUs = 5000000ULL;  // 5 segundos em µs
+    constexpr uint64_t kBootCompensationUs = 5000000ULL;  // 5s em µs
     uint64_t sleepUs = (uint64_t)_weatherIntervalMs * 1000ULL;
+    if (maxSleepMs > 0) {
+        // Limita ao mínimo entre o intervalo do clima e o horário do alarme
+        sleepUs = min(sleepUs, maxSleepMs * 1000ULL);
+    }
     if (sleepUs > kBootCompensationUs) sleepUs -= kBootCompensationUs;
-    esp_sleep_enable_timer_wakeup(sleepUs);
+    else                                sleepUs  = 1000000ULL;  // mínimo 1s
 
-    LOG_I("power", "Entrando em deep sleep");
+    esp_sleep_enable_timer_wakeup(sleepUs);
+    LOG_I("power", "Entrando em deep sleep por %.1f min", (double)sleepUs / 60000000.0);
     Serial.flush();
     esp_deep_sleep_start();
 }

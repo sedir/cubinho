@@ -8,6 +8,7 @@
 #include "screen_home.h"
 #include "qr_scanner.h"
 #include "voice_cmd.h"
+#include "alarm_manager.h"
 #include <M5Unified.h>
 
 // ── Layout interno ───────────────────────────────────────────────────────────
@@ -44,13 +45,16 @@ static const VEntry kEntries[] = {
     { EKIND_CYCLE,    "Nome T1",         "Nome mostrado na tela inicial"      },  // 13
     { EKIND_CYCLE,    "Nome T2",         "Nome mostrado na tela inicial"      },  // 14
     { EKIND_CYCLE,    "Nome T3",         "Nome mostrado na tela inicial"      },  // 15
-    { EKIND_CATEGORY, "Energia",         nullptr                               },  // 16
-    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"         },  // 17
-    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"             },  // 18
-    { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 19
-    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 20
-    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 21
-    { EKIND_TOGGLE,   "Cmd por voz",     "Press longa no header p/ ouvir"    },  // 22
+    { EKIND_CATEGORY, "Alarme",          nullptr                               },  // 16
+    { EKIND_TOGGLE,   "Alarme ativo",    "Toca no horario configurado"        },  // 17
+    { EKIND_CYCLE,    "Horario",         "Toque para alterar o horario"       },  // 18
+    { EKIND_CATEGORY, "Energia",         nullptr                               },  // 19
+    { EKIND_CYCLE,    "Deep sleep",      "Tempo ate suspender a tela"         },  // 20
+    { EKIND_TOGGLE,   "Acelerometro",    "Acorda do dim ao mover"             },  // 21
+    { EKIND_CATEGORY, "Sistema",         nullptr                               },  // 22
+    { EKIND_ACTION,   "Reiniciar",       "Reinicia o aparelho agora"          },  // 23
+    { EKIND_ACTION,   "Reset de fabrica","Apaga WiFi e configuracoes"         },  // 24
+    { EKIND_TOGGLE,   "Cmd por voz",     "Press longa no header p/ ouvir"    },  // 25
 };
 static const int kEntryCount = (int)(sizeof(kEntries) / sizeof(kEntries[0]));
 
@@ -69,11 +73,13 @@ enum ItemIdx {
     IDX_TIMER_LABEL_1 = 13,
     IDX_TIMER_LABEL_2 = 14,
     IDX_TIMER_LABEL_3 = 15,
-    IDX_DEEP_SLEEP    = 17,
-    IDX_ACCEL_WAKE    = 18,
-    IDX_RESTART       = 20,
-    IDX_FACTORY_RESET = 21,
-    IDX_VOICE         = 22,
+    IDX_ALARM_ENABLED = 17,
+    IDX_ALARM_TIME    = 18,
+    IDX_DEEP_SLEEP    = 20,
+    IDX_ACCEL_WAKE    = 21,
+    IDX_RESTART       = 23,
+    IDX_FACTORY_RESET = 24,
+    IDX_VOICE         = 25,
 };
 
 // Opções de ciclo
@@ -127,7 +133,12 @@ static String valueLabel(int entryIdx, const RuntimeConfig& cfg) {
         case IDX_AUTO_BRIGHT: return cfg.autoBrightness ? "ON" : "OFF";
         case IDX_NIGHT_MODE:  return cfg.nightMode      ? "ON" : "OFF";
         case IDX_ACCEL_WAKE:  return cfg.accelWake      ? "ON" : "OFF";
-        case IDX_VOICE:       return cfg.voiceEnabled   ? "ON" : "OFF";
+        case IDX_VOICE:         return cfg.voiceEnabled   ? "ON" : "OFF";
+        case IDX_ALARM_ENABLED: return cfg.alarmEnabled   ? "ON" : "OFF";
+        case IDX_ALARM_TIME: {
+            char buf[8]; snprintf(buf, sizeof(buf), "%02d:%02d", cfg.alarmHour, cfg.alarmMinute);
+            return buf;
+        }
         case IDX_TIMER_LABEL_1:
         case IDX_TIMER_LABEL_2:
         case IDX_TIMER_LABEL_3:
@@ -439,6 +450,13 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
     int idx = hitTestEntry(tapY, scrollOffset);
     if (idx < 0) return false;
     const VEntry& e = kEntries[idx];
+
+    // Excepção: horário do alarme abre o picker com tap (entrada CYCLE especial)
+    if (idx == IDX_ALARM_TIME) {
+        alarmPickerOpen(cfg.alarmHour, cfg.alarmMinute);
+        return false;
+    }
+
     if (e.kind == EKIND_CATEGORY || e.kind == EKIND_ACTION) return false;
 
     switch (idx) {
@@ -456,6 +474,9 @@ bool screenSettingsHandleTap(int tapX, int tapY, RuntimeConfig& cfg, int scrollO
             break;
         case IDX_VOICE:
             cfg.voiceEnabled = !cfg.voiceEnabled;
+            break;
+        case IDX_ALARM_ENABLED:
+            cfg.alarmEnabled = !cfg.alarmEnabled;
             break;
         case IDX_TIMER_LABEL_1:
         case IDX_TIMER_LABEL_2:

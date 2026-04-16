@@ -13,6 +13,9 @@ struct RuntimeConfig {
     int   timerLabelPreset[MAX_TIMERS];  // Nome escolhido para cada slot
     bool  voiceEnabled;         // Comandos por voz via microfone embutido
     bool  nightMode;            // Modo noturno: brilho mínimo + sem auto-brilho
+    bool  alarmEnabled;         // Alarme de despertar ativo
+    int   alarmHour;            // Hora do alarme (0–23)
+    int   alarmMinute;          // Minuto do alarme (0–59)
 };
 
 // Carrega configuração do NVS (usa defaults de config.h se namespace vazio).

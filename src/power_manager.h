@@ -28,7 +28,9 @@ bool batteryIsCharging();
 bool powerShouldDeepSleep();
 
 // Entra em deep sleep. NUNCA retorna.
-void powerEnterDeepSleep();
+// maxSleepMs: se > 0, limita o timer de wake (use para acordar no horário do alarme).
+// O timer final é min(intervalo_clima, maxSleepMs).
+void powerEnterDeepSleep(uint64_t maxSleepMs = 0);
 
 // Lê a luminosidade ambiente via LTR553 ALS (0–65535). Item #19.
 uint16_t powerReadAmbientLight();
