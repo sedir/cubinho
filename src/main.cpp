@@ -54,6 +54,7 @@ RTC_DATA_ATTR static uint32_t    rtcTimerRemain[MAX_TIMERS]  = { 300000, 600000,
 RTC_DATA_ATTR static int         rtcTimerFocused = 0;
 RTC_DATA_ATTR static char        rtcTimerCustomName[MAX_TIMERS][16] = {};
 RTC_DATA_ATTR static bool        rtcTimerHasCustomName[MAX_TIMERS]  = {};
+RTC_DATA_ATTR static AlarmPersist rtcAlarmPersist = {};
 
 // ── Estado volátil ───────────────────────────────────────────────────────────
 static int         currentScreen  = 0;
@@ -389,8 +390,9 @@ void setup() {
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
-    runtimeConfigApply(g_runtimeCfg);  // aplica tudo, inclusive voiceCmdSetEnabled
+    runtimeConfigApply(g_runtimeCfg);
     voiceCmdInit(g_runtimeCfg.voiceEnabled);
+    alarmSetPersist(rtcAlarmPersist);  // restaura estado do alarme antes de qualquer wake check
 
     #undef SPLASH
 
@@ -405,17 +407,33 @@ void setup() {
         weatherData = rtcWeather;
         wifiConnectAndFetch(weatherData);
         rtcWeather = weatherData;
+
+        // Verifica alarme antes de voltar a dormir
+        alarmCheck(g_runtimeCfg);
+        if (!alarmIsRinging()) {
+            alarmGetPersist(rtcAlarmPersist);
+            rtcBootCount++;
+            int64_t secsAlarm = alarmSecondsUntilNext(g_runtimeCfg);
+            uint64_t maxMs = (secsAlarm > 0 && secsAlarm < 86400LL)
+                           ? (uint64_t)secsAlarm * 1000ULL : 0;
+            LOG_I("main", "Alarme em %llds — sleep max=%llums", secsAlarm, maxMs);
+            powerEnterDeepSleep(maxMs);
+            return;
+        }
+        // Alarme disparou — acorda completamente (display + loop normal)
+        LOG_I("main", "Alarme detectado no wake do timer — acorda completamente");
         rtcBootCount++;
-        powerEnterDeepSleep();
-        return;
+        // isTouchWake=false, mas o path de wake por toque é o mais adequado:
+        // restaura timers e inicia WiFi async
     }
 
-    // ── Cold boot ou wake por toque ──
-    currentScreen = rtcScreen;
+    // ── Cold boot, wake por toque, ou wake do timer com alarme ──
+    bool isAlarmWake = alarmIsRinging();  // true quando timer wake detectou alarme
+    currentScreen = isAlarmWake ? 0 : rtcScreen;
     weatherData   = rtcWeather;
 
-    if (!isColdBoot && isTouchWake && rtcBootCount > 0) {
-        LOG_I("main", "Wake por toque — restaurando estado");
+    if (!isColdBoot && (isTouchWake || isAlarmWake) && rtcBootCount > 0) {
+        LOG_I("main", isAlarmWake ? "Wake por alarme" : "Wake por toque — restaurando estado");
         TimerPersist tp;
         tp.focused = rtcTimerFocused;
         for (int i = 0; i < MAX_TIMERS; i++) {
@@ -427,6 +445,7 @@ void setup() {
         }
         screenHomeSetTimerPersist(tp);
         wifiBeginAsync(weatherData);
+        if (isAlarmWake) powerOnTouch();  // acende o display
     } else {
         LOG_I("main", "Boot inicial — splash + init completo");
         // Callback para atualizar splash durante o wifiInit
@@ -761,7 +780,12 @@ void loop() {
         }
 
         ledOff();
-        powerEnterDeepSleep();
+        alarmGetPersist(rtcAlarmPersist);
+        int64_t secsAlarm = alarmSecondsUntilNext(g_runtimeCfg);
+        uint64_t maxMs = (secsAlarm > 0 && secsAlarm < 86400LL)
+                       ? (uint64_t)secsAlarm * 1000ULL : 0;
+        LOG_I("main", "Alarme em %llds — sleep max=%llums", secsAlarm, maxMs);
+        powerEnterDeepSleep(maxMs);
         return;
     }
 

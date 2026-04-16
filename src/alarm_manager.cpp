@@ -64,6 +64,41 @@ void alarmSnooze() {
     LOG_I("alarm", "Soneca ativada — retoma em 5 min");
 }
 
+// ── Persistência ───────────────────────────────────────────────────────────────
+void alarmGetPersist(AlarmPersist& out) {
+    out.state         = (int)g_alarmState;
+    out.triggeredYday = g_triggeredYday;
+    out.snoozeUntil   = (int64_t)g_snoozeUntil;
+}
+
+void alarmSetPersist(const AlarmPersist& in) {
+    g_alarmState    = (AlarmState)constrain(in.state, 0, 2);
+    g_triggeredYday = in.triggeredYday;
+    g_snoozeUntil   = (time_t)in.snoozeUntil;
+}
+
+int64_t alarmSecondsUntilNext(const RuntimeConfig& cfg) {
+    if (!cfg.alarmEnabled) return -1;
+
+    struct tm t;
+    if (!getLocalTime(&t, 0)) return -1;
+
+    struct tm alarmTm  = t;
+    alarmTm.tm_hour    = cfg.alarmHour;
+    alarmTm.tm_min     = cfg.alarmMinute;
+    alarmTm.tm_sec     = 0;
+    time_t alarmTs     = mktime(&alarmTm);
+    time_t nowTs       = time(nullptr);
+
+    // Se já passou hoje ou já disparou hoje, agenda para amanhã
+    if (alarmTs <= nowTs || t.tm_yday == g_triggeredYday) {
+        alarmTs += 86400;
+    }
+
+    int64_t secs = (int64_t)(alarmTs - nowTs);
+    return (secs > 0) ? secs : -1;
+}
+
 // ── Time-picker ────────────────────────────────────────────────────────────────
 void alarmPickerOpen(int h, int m) {
     g_pickerH    = h;
