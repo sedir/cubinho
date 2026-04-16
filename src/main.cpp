@@ -475,6 +475,7 @@ void loop() {
 
     // ── QR scanner ───────────────────────────────────────────────────────────
     if (qrScannerIsActive()) {
+        powerBoostCpu();  // captura + conversão YUV + quirc são CPU-intensivos
         if (qrScannerUpdate(*fb, touch.wasReleased())) {
             qrScannerEnd();
             needsRedraw = true;
