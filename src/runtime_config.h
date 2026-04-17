@@ -31,3 +31,8 @@ void runtimeConfigClear();
 bool runtimeConfigHasCalendarUrl();
 void runtimeConfigGetCalendarUrl(char* out, size_t outSize);
 void runtimeConfigSaveCalendarUrl(const char* url);
+
+// Ponteiro para a configuracao ativa em memoria. Usado pelo portal web.
+// Permanece valido por toda a vida do processo.
+void runtimeConfigRegisterLive(RuntimeConfig* cfg);
+RuntimeConfig* runtimeConfigLive();

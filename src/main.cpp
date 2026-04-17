@@ -379,6 +379,7 @@ void setup() {
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
+    runtimeConfigRegisterLive(&g_runtimeCfg);
     runtimeConfigApply(g_runtimeCfg);  // aplica tudo, inclusive voiceCmdSetEnabled
     voiceCmdInit(g_runtimeCfg.voiceEnabled);
 
@@ -459,6 +460,7 @@ void setup() {
 void loop() {
     static bool lastPortalMode = false;
     static bool lastCalendarConfigMode = false;
+    static bool lastWebConfigMode = false;
 
     M5.update();
     telnetLogUpdate();
@@ -467,10 +469,13 @@ void loop() {
 
     bool portalMode = wifiIsPortalMode();
     bool calendarConfigMode = wifiIsCalendarConfigMode();
-    if (portalMode != lastPortalMode || calendarConfigMode != lastCalendarConfigMode) {
+    bool webConfigMode = wifiIsWebConfigMode();
+    if (portalMode != lastPortalMode || calendarConfigMode != lastCalendarConfigMode
+        || webConfigMode != lastWebConfigMode) {
         needsRedraw = true;
         lastPortalMode = portalMode;
         lastCalendarConfigMode = calendarConfigMode;
+        lastWebConfigMode = webConfigMode;
     }
 
     // ── Toque ────
@@ -551,7 +556,10 @@ void loop() {
             }
         } else if (currentScreen == 3) {
             // Tela de configurações: scroll vertical, tap e long press
-            if (wifiIsCalendarConfigMode()) {
+            if (wifiIsWebConfigMode()) {
+                wifiStopWebConfig();
+                needsRedraw = true;
+            } else if (wifiIsCalendarConfigMode()) {
                 wifiStopCalendarConfig();
                 needsRedraw = true;
             } else {
@@ -700,7 +708,8 @@ void loop() {
 
     // ── Dim ──
     bool wasDim = powerIsDim();
-    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() || screenHomeIsStopwatchRunning());
+    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() || screenHomeIsStopwatchRunning()
+                || wifiIsWebConfigMode() || wifiIsCalendarConfigMode());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ──
@@ -716,7 +725,8 @@ void loop() {
 
     // ── Deep sleep ──
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
-        !screenHomeIsStopwatchRunning() && powerShouldDeepSleep()) {
+        !screenHomeIsStopwatchRunning() && !wifiIsWebConfigMode() &&
+        !wifiIsCalendarConfigMode() && powerShouldDeepSleep()) {
 
         LOG_I("main", "Deep sleep — salvando estado");
         rtcScreen  = currentScreen;
