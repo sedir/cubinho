@@ -593,6 +593,8 @@ void wifiSetKeepAlive(bool keep)
     }
 }
 
+bool wifiIsKeepAlive() { return _keepAlive; }
+
 int wifiGetRSSI()
 {
     if (WiFi.status() != WL_CONNECTED)

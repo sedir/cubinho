@@ -230,6 +230,7 @@ bool powerIsDim() {
 
 bool powerShouldDeepSleep() {
     if (_deepSleepTimeoutMs == 0) return false;  // 0 = nunca dormir
+    if (powerIsOnExternalPower()) return false;  // cabo conectado → nunca dormir
     return (millis() - _lastTouchMs) > _deepSleepTimeoutMs;
 }
 
@@ -266,6 +267,16 @@ int batteryPercent() {
 
 bool batteryIsCharging() {
     return M5.Power.isCharging();
+}
+
+bool powerIsOnExternalPower() {
+    // AXP2101: isCharging() vira false quando a bateria atinge a regulacao (~100%).
+    // Nesse estado o cabo ainda esta conectado e fornece energia — cubrimos com
+    // uma heuristica de nivel >= 100%. Na pratica o nivel so se mantem em 100
+    // enquanto o cabo estiver ligado; apos desconectar cai rapidamente para 99.
+    if (M5.Power.isCharging()) return true;
+    int pct = M5.Power.getBatteryLevel();
+    return (pct >= 100);
 }
 
 // ── Setters de configuração runtime ─────────────────────────────────────────
