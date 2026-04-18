@@ -1,5 +1,26 @@
 # M5 CoreS3 — Cubinho
 
+> **Manutenção da documentação (regra do agente)**
+>
+> Antes de concluir qualquer tarefa que altere os pontos abaixo, atualize este arquivo **e** o `README.md` quando aplicável. Verificação obrigatória no final de cada PR — se o diff mexe em um dos gatilhos, o CLAUDE.md tem que estar no commit.
+>
+> Gatilhos que exigem atualização dos MDs:
+> - Nova lib em `platformio.ini` (ou remoção/upgrade com mudança de API)
+> - Novo arquivo `.cpp`/`.h` em `src/` (atualizar árvore de arquivos)
+> - Novo campo em `RuntimeConfig` (atualizar tabela de Configurações)
+> - Nova tela ou remoção de tela (`screen_*`) — atualizar lista de telas e `SCREEN_COUNT`
+> - Mudança em protocolo de rede (novo endpoint HTTP, MQTT, WebSocket, etc.)
+> - Novo hardware exposto (sensor, periférico I2C, GPIO novo)
+> - Mudança em comportamento de energia (dim/deep sleep/wake-lock)
+> - Mudança em `config.h` defaults que o usuário precisa conhecer
+> - Novo gesto de toque ou swipe com zona/prioridade dedicada
+> - Mudança em layout de UI relevante (tabelas/diagramas ASCII das telas)
+> - Alteração em `SPLASH_TOTAL` / ordem de boot
+>
+> Ao abrir PR, a descrição deve mencionar explicitamente "CLAUDE.md atualizado" (ou "sem impacto em CLAUDE.md" com justificativa). O `ENERGY.md` segue a mesma regra quando a mudança afeta consumo ou ciclo de energia.
+
+---
+
 ## Visão geral do projeto
 
 Firmware para M5 CoreS3 fixado na porta da geladeira via módulo magnético.
