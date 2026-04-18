@@ -4,6 +4,7 @@
 #include "power_manager.h"
 #include "screen_home.h"
 #include "voice_cmd.h"
+#include "notifications.h"
 #include <Preferences.h>
 
 #ifndef CALENDAR_ICS_URL
@@ -12,6 +13,15 @@
 
 static Preferences _prefs;
 static char _calendarUrl[192] = CALENDAR_ICS_URL;
+static RuntimeConfig* _liveCfg = nullptr;
+
+void runtimeConfigRegisterLive(RuntimeConfig* cfg) {
+    _liveCfg = cfg;
+}
+
+RuntimeConfig* runtimeConfigLive() {
+    return _liveCfg;
+}
 
 void runtimeConfigLoad(RuntimeConfig& cfg) {
     _prefs.begin("cfg", true);  // read-only
@@ -31,6 +41,13 @@ void runtimeConfigLoad(RuntimeConfig& cfg) {
     }
     String calUrl = _prefs.getString("calUrl", CALENDAR_ICS_URL);
     strlcpy(_calendarUrl, calUrl.c_str(), sizeof(_calendarUrl));
+
+    cfg.mqttEnabled = _prefs.getBool("mqEn", false);
+    cfg.mqttPort    = _prefs.getInt ("mqPort", 1883);
+    strlcpy(cfg.mqttHost,  _prefs.getString("mqHost",  "").c_str(), sizeof(cfg.mqttHost));
+    strlcpy(cfg.mqttUser,  _prefs.getString("mqUser",  "").c_str(), sizeof(cfg.mqttUser));
+    strlcpy(cfg.mqttPass,  _prefs.getString("mqPass",  "").c_str(), sizeof(cfg.mqttPass));
+    strlcpy(cfg.mqttTopic, _prefs.getString("mqTopic", "cubinho/notif").c_str(), sizeof(cfg.mqttTopic));
     _prefs.end();
 }
 
@@ -50,6 +67,12 @@ void runtimeConfigSave(const RuntimeConfig& cfg) {
         snprintf(key, sizeof(key), "tLabel%d", i);
         _prefs.putInt(key, cfg.timerLabelPreset[i]);
     }
+    _prefs.putBool  ("mqEn",    cfg.mqttEnabled);
+    _prefs.putInt   ("mqPort",  cfg.mqttPort);
+    _prefs.putString("mqHost",  cfg.mqttHost);
+    _prefs.putString("mqUser",  cfg.mqttUser);
+    _prefs.putString("mqPass",  cfg.mqttPass);
+    _prefs.putString("mqTopic", cfg.mqttTopic);
     _prefs.end();
 }
 
@@ -78,6 +101,8 @@ void runtimeConfigApply(const RuntimeConfig& cfg) {
     for (int i = 0; i < MAX_TIMERS; i++) {
         screenHomeSetTimerLabelPreset(i, cfg.timerLabelPreset[i]);
     }
+    notifMqttApplyConfig(cfg.mqttEnabled, cfg.mqttHost, cfg.mqttPort,
+                         cfg.mqttUser, cfg.mqttPass, cfg.mqttTopic);
 }
 
 void runtimeConfigClear() {

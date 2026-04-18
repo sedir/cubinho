@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "ota_manager.h"
 #include "runtime_config.h"
+#include "screen_home.h"
 #include "bg_network.h"
 #include <WiFi.h>
 #include <DNSServer.h>
@@ -33,12 +34,16 @@ static WifiProgressCb _progressCb = nullptr;
 // ── Portal cativo (item #23) ─────────────────────────────────────────────────
 static bool _portalMode = false;
 static bool _calendarConfigMode = false;
+static bool _webConfigMode = false;
 static DNSServer *_dnsServer = nullptr;
 static WebServer *_webServer = nullptr;
 static uint8_t _failCount = 0;
 static bool _calendarStopPending = false;
 static uint32_t _calendarStopAtMs = 0;
 static char _calendarConfigAddress[40] = "";
+static char _webConfigAddress[40] = "";
+static bool _webConfigRestartPending = false;
+static uint32_t _webConfigRestartAtMs = 0;
 
 static Preferences _prefs;
 static String _nvsSSID;
@@ -195,6 +200,10 @@ static void stopWebUi()
     _calendarStopPending = false;
     _calendarStopAtMs = 0;
     _calendarConfigAddress[0] = '\0';
+    _webConfigMode = false;
+    _webConfigRestartPending = false;
+    _webConfigRestartAtMs = 0;
+    _webConfigAddress[0] = '\0';
 }
 
 static void startPortal()
@@ -311,7 +320,7 @@ static void startCalendarConfigServer()
 // ── Helpers ──────────────────────────────────────────────────────────────────
 static void wifiOff()
 {
-    if (_keepAlive || _calendarConfigMode)
+    if (_keepAlive || _calendarConfigMode || _webConfigMode)
     {
         LOG_I("wifi", "WiFi mantido ativo");
         return;
@@ -401,7 +410,7 @@ static void pollAsync()
 // ── API pública ──────────────────────────────────────────────────────────────
 void wifiCheckPortal()
 {
-    if (_portalMode || _calendarConfigMode)
+    if (_portalMode || _calendarConfigMode || _webConfigMode)
         return;
     if (_failCount >= WIFI_PORTAL_FAIL_THRESHOLD)
     {
@@ -434,7 +443,7 @@ void wifiBeginAsync(WeatherData &out)
 
 bool wifiConnectAndFetch(WeatherData &out)
 {
-    if (_portalMode || _calendarConfigMode)
+    if (_portalMode || _calendarConfigMode || _webConfigMode)
         return false;
     loadCredentials();
 
@@ -526,7 +535,7 @@ void wifiInit(WeatherData &weatherData)
 
 void wifiScheduleUpdate(WeatherData &weatherData)
 {
-    if (_portalMode || _calendarConfigMode)
+    if (_portalMode || _calendarConfigMode || _webConfigMode)
         return;
     if (_state != ASYNC_IDLE)
     {
@@ -545,7 +554,7 @@ void wifiScheduleUpdate(WeatherData &weatherData)
 
 void wifiForceRefresh(WeatherData &weatherData)
 {
-    if (_state != ASYNC_IDLE || _calendarConfigMode)
+    if (_state != ASYNC_IDLE || _calendarConfigMode || _webConfigMode)
         return; // já buscando
     LOG_I("wifi", "Atualizacao forcada pelo usuario");
     wifiBeginAsync(weatherData);
@@ -569,7 +578,7 @@ void wifiPortalUpdate()
 {
     if (_portalMode && _dnsServer)
         _dnsServer->processNextRequest();
-    if ((_portalMode || _calendarConfigMode) && _webServer)
+    if ((_portalMode || _calendarConfigMode || _webConfigMode) && _webServer)
         _webServer->handleClient();
     if (_calendarConfigMode && _calendarStopPending && millis() >= _calendarStopAtMs)
     {
@@ -577,6 +586,12 @@ void wifiPortalUpdate()
         if (!_keepAlive)
             wifiOff();
         LOG_I("wifi", "Config iCal encerrada");
+    }
+    if (_webConfigMode && _webConfigRestartPending && millis() >= _webConfigRestartAtMs)
+    {
+        LOG_I("wifi", "Reiniciando dispositivo apos webConfig");
+        delay(100);
+        ESP.restart();
     }
 }
 
@@ -610,7 +625,7 @@ void wifiSetUpdateInterval(uint32_t ms)
 
 bool wifiStartCalendarConfig()
 {
-    if (_portalMode || _calendarConfigMode)
+    if (_portalMode || _calendarConfigMode || _webConfigMode)
         return false;
     if (_state != ASYNC_IDLE)
     {
@@ -638,4 +653,637 @@ void wifiGetCalendarConfigAddress(char *out, size_t outSize)
     if (!out || outSize == 0)
         return;
     strlcpy(out, _calendarConfigAddress, outSize);
+}
+
+// ── Portal unificado de configuracao via celular ─────────────────────────────
+static String webCfgEscape(const char *input)
+{
+    String out;
+    for (const char *p = input; p && *p; p++)
+    {
+        switch (*p)
+        {
+            case '&': out += F("&amp;");  break;
+            case '"': out += F("&quot;"); break;
+            case '<': out += F("&lt;");   break;
+            case '>': out += F("&gt;");   break;
+            case '\'': out += F("&#39;"); break;
+            default: out += *p;
+        }
+    }
+    return out;
+}
+
+static String webCfgJsonEscape(const char *input)
+{
+    String out;
+    for (const char *p = input; p && *p; p++)
+    {
+        unsigned char c = (unsigned char)*p;
+        switch (c)
+        {
+            case '\\': out += F("\\\\"); break;
+            case '"':  out += F("\\\""); break;
+            case '\n': out += F("\\n");  break;
+            case '\r': out += F("\\r");  break;
+            case '\t': out += F("\\t");  break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += (char)c;
+                }
+        }
+    }
+    return out;
+}
+
+static String webCfgBuildStateJson()
+{
+    RuntimeConfig *cfg = runtimeConfigLive();
+    char calUrl[192];
+    runtimeConfigGetCalendarUrl(calUrl, sizeof(calUrl));
+
+    String json;
+    json.reserve(900);
+    json += F("{");
+    if (cfg) {
+        json += F("\"wifiKeepAlive\":");        json += (cfg->wifiKeepAlive       ? F("true") : F("false"));
+        json += F(",\"weatherIntervalMin\":");  json += cfg->weatherIntervalMin;
+        json += F(",\"brightnessActive\":");    json += cfg->brightnessActive;
+        json += F(",\"dimTimeoutSec\":");       json += cfg->dimTimeoutSec;
+        json += F(",\"autoBrightness\":");      json += (cfg->autoBrightness      ? F("true") : F("false"));
+        json += F(",\"deepSleepTimeoutMin\":"); json += cfg->deepSleepTimeoutMin;
+        json += F(",\"accelWake\":");           json += (cfg->accelWake           ? F("true") : F("false"));
+        json += F(",\"voiceEnabled\":");        json += (cfg->voiceEnabled        ? F("true") : F("false"));
+        json += F(",\"nightMode\":");           json += (cfg->nightMode           ? F("true") : F("false"));
+        json += F(",\"mqttEnabled\":");         json += (cfg->mqttEnabled         ? F("true") : F("false"));
+        json += F(",\"mqttHost\":\"");          json += webCfgJsonEscape(cfg->mqttHost);  json += F("\"");
+        json += F(",\"mqttPort\":");            json += cfg->mqttPort;
+        json += F(",\"mqttUser\":\"");          json += webCfgJsonEscape(cfg->mqttUser);  json += F("\"");
+        json += F(",\"mqttPass\":\"");          json += webCfgJsonEscape(cfg->mqttPass);  json += F("\"");
+        json += F(",\"mqttTopic\":\"");         json += webCfgJsonEscape(cfg->mqttTopic); json += F("\"");
+        json += F(",\"timerLabels\":[");
+        for (int i = 0; i < MAX_TIMERS; i++) {
+            if (i) json += ',';
+            json += cfg->timerLabelPreset[i];
+        }
+        json += F("]");
+    } else {
+        json += F("\"error\":\"no-config\"");
+    }
+    json += F(",\"calendarUrl\":\"");
+    json += webCfgJsonEscape(calUrl);
+    json += F("\",\"timerPresets\":[");
+    int presetCount = screenHomeGetTimerLabelPresetCount();
+    for (int i = 0; i < presetCount; i++) {
+        if (i) json += ',';
+        json += F("\"");
+        json += webCfgJsonEscape(screenHomeGetTimerLabelPresetName(i));
+        json += F("\"");
+    }
+    json += F("],\"ip\":\"");
+    json += WiFi.localIP().toString();
+    json += F("\",\"ssid\":\"");
+    json += webCfgJsonEscape(WiFi.SSID().c_str());
+    json += F("\"}");
+    return json;
+}
+
+// HTML principal — layout moderno, escuro, mobile-first. Todos os campos sao
+// controlados via JS que sincroniza com /api/state (GET) e /api/save (POST JSON).
+static const char WEBCFG_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>Cubinho</title>
+<style>
+:root{--bg:#0b1020;--card:#151b2e;--card2:#1f2740;--line:#283150;--text:#e6ebff;--muted:#8892b5;--accent:#fd8a20;--accent2:#f59e0b;--ok:#22c55e;--bad:#ef4444;}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:linear-gradient(180deg,#0b1020 0%,#0a0f1c 100%);color:var(--text);min-height:100dvh;padding:24px 16px 40px;padding-top:max(24px,env(safe-area-inset-top));padding-bottom:max(40px,env(safe-area-inset-bottom))}
+.wrap{max-width:560px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.01em}
+h1 span{color:var(--accent)}
+.pill{font-size:12px;background:var(--card2);color:var(--muted);padding:6px 10px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 12px 40px -20px rgba(0,0,0,.6)}
+.card h2{margin:0 0 4px;font-size:14px;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+.card p.desc{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.5}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:none}
+.row label{flex:1;min-width:0}
+.row label .lbl{display:block;font-size:15px;font-weight:600}
+.row label .sub{display:block;font-size:12px;color:var(--muted);margin-top:2px;line-height:1.4}
+input[type=text],input[type=url],input[type=number],select{width:100%;padding:14px 14px;background:#0a1023;color:var(--text);border:1px solid var(--line);border-radius:12px;font-size:16px;outline:none;transition:border-color .15s}
+input:focus,select:focus{border-color:var(--accent)}
+select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23fd8a20' d='M6 8 0 0h12z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
+.toggle{position:relative;width:52px;height:30px;flex-shrink:0;cursor:pointer}
+.toggle input{position:absolute;inset:0;opacity:0;cursor:pointer;margin:0}
+.toggle .track{position:absolute;inset:0;background:#2a3254;border-radius:999px;transition:background .2s}
+.toggle .thumb{position:absolute;top:3px;left:3px;width:24px;height:24px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.toggle input:checked ~ .track{background:var(--accent)}
+.toggle input:checked ~ .thumb{transform:translateX(22px)}
+.range{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.range input[type=range]{-webkit-appearance:none;appearance:none;width:140px;height:6px;background:#2a3254;border-radius:3px;outline:none}
+.range input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;background:var(--accent);border-radius:50%;cursor:pointer;border:0}
+.range input[type=range]::-moz-range-thumb{width:22px;height:22px;background:var(--accent);border-radius:50%;cursor:pointer;border:0}
+.range .v{min-width:44px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--accent)}
+.field{width:100%}
+.field .fieldrow{margin-top:10px}
+button{font-family:inherit}
+.btn{display:block;width:100%;padding:16px;background:var(--accent);color:#0b1020;border:0;border-radius:14px;font-size:16px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;transition:transform .1s,background .15s}
+.btn:hover{background:var(--accent2)}
+.btn:active{transform:scale(.98)}
+.btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid rgba(239,68,68,.4)}
+.btn.danger:hover{background:rgba(239,68,68,.1)}
+.save-bar{position:sticky;bottom:calc(env(safe-area-inset-bottom) + 12px);margin-top:24px;z-index:10}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 24px);transform:translate(-50%,40px);background:var(--ok);color:#0b1020;padding:12px 20px;border-radius:999px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:transform .3s,opacity .3s;pointer-events:none;z-index:20}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.err{background:var(--bad);color:#fff}
+.ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);font-weight:700}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+footer{margin-top:28px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6}
+footer a{color:var(--accent)}
+.hidden{display:none!important}
+</style></head>
+<body><div class="wrap">
+<header>
+  <h1>Cubinho<span>.</span></h1>
+  <span class="pill" id="ip">--</span>
+</header>
+
+<div class="card">
+  <h2>Display</h2>
+  <p class="desc">Brilho, timeout e modo noturno.</p>
+  <div class="row">
+    <label><span class="lbl">Brilho ativo</span><span class="sub">0 = mais escuro, 255 = maximo</span></label>
+    <div class="range"><input type="range" id="brightnessActive" min="10" max="255" step="5"><span class="v" id="brightnessActive_v">0</span></div>
+  </div>
+  <div class="row">
+    <label for="autoBrightness"><span class="lbl">Auto-brilho</span><span class="sub">Ajusta pela luz ambiente</span></label>
+    <span class="toggle"><input type="checkbox" id="autoBrightness"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+  <div class="row">
+    <label for="nightMode"><span class="lbl">Modo noturno</span><span class="sub">Brilho minimo, sem auto-brilho</span></label>
+    <span class="toggle"><input type="checkbox" id="nightMode"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+  <div class="row">
+    <label for="dimTimeoutSec"><span class="lbl">Tempo ate dim</span><span class="sub">Inatividade antes de reduzir brilho</span></label>
+    <select id="dimTimeoutSec">
+      <option value="15">15 s</option><option value="30">30 s</option>
+      <option value="60">1 min</option><option value="120">2 min</option>
+      <option value="300">5 min</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Energia</h2>
+  <p class="desc">Deep sleep e wake por movimento.</p>
+  <div class="row">
+    <label for="deepSleepTimeoutMin"><span class="lbl">Deep sleep</span><span class="sub">Suspende apos periodo em dim</span></label>
+    <select id="deepSleepTimeoutMin">
+      <option value="0">Nunca</option><option value="2">2 min</option>
+      <option value="5">5 min</option><option value="10">10 min</option>
+      <option value="30">30 min</option><option value="60">1 hora</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="accelWake"><span class="lbl">Acordar por movimento</span><span class="sub">Acelerometro acorda do dim</span></label>
+    <span class="toggle"><input type="checkbox" id="accelWake"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Rede</h2>
+  <p class="desc">WiFi permanente mantem OTA e Telnet disponiveis.</p>
+  <div class="row">
+    <label for="wifiKeepAlive"><span class="lbl">WiFi permanente</span><span class="sub">Conectado em <span class="ip" id="ssid">--</span></span></label>
+    <span class="toggle"><input type="checkbox" id="wifiKeepAlive"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+  <div class="row">
+    <label for="weatherIntervalMin"><span class="lbl">Atualizacao do clima</span><span class="sub">Com que frequencia buscar dados</span></label>
+    <select id="weatherIntervalMin">
+      <option value="15">15 min</option><option value="30">30 min</option>
+      <option value="60">1 hora</option><option value="120">2 horas</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Notificacoes MQTT</h2>
+  <p class="desc">Recebe notificacoes publicadas em um broker MQTT. Requer WiFi permanente.</p>
+  <div class="row">
+    <label for="mqttEnabled"><span class="lbl">Ativar MQTT</span><span class="sub">Conecta ao broker e inscreve no topico</span></label>
+    <span class="toggle"><input type="checkbox" id="mqttEnabled"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+  <div class="row field">
+    <label><span class="lbl">Host</span><span class="sub">Ex: broker.hivemq.com ou 192.168.1.10</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttHost" placeholder="broker.exemplo.com" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Porta</span><span class="sub">Padrao 1883 (sem TLS)</span></label>
+  </div>
+  <div class="fieldrow"><input type="number" id="mqttPort" min="1" max="65535" placeholder="1883"></div>
+  <div class="row field">
+    <label><span class="lbl">Topico</span><span class="sub">Ex: cubinho/notif</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttTopic" placeholder="cubinho/notif" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Usuario</span><span class="sub">Opcional</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttUser" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Senha</span><span class="sub">Opcional</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttPass" autocomplete="off" spellcheck="false"></div>
+</div>
+
+<div class="card">
+  <h2>Calendario</h2>
+  <p class="desc">URL privada de um feed iCal/ICS. Deixe em branco para desativar.</p>
+  <div class="row field">
+    <label><span class="lbl">URL do feed</span><span class="sub">Google Agenda: &ldquo;secret&rdquo; da agenda privada</span></label>
+  </div>
+  <div class="fieldrow"><input type="url" id="calendarUrl" placeholder="https://.../basic.ics" autocomplete="off" spellcheck="false"></div>
+</div>
+
+<div class="card">
+  <h2>Timers</h2>
+  <p class="desc">Nome mostrado no tab de cada slot.</p>
+  <div class="row">
+    <label for="t0"><span class="lbl">T1</span></label>
+    <select id="t0" class="timerSel"></select>
+  </div>
+  <div class="row">
+    <label for="t1"><span class="lbl">T2</span></label>
+    <select id="t1" class="timerSel"></select>
+  </div>
+  <div class="row">
+    <label for="t2"><span class="lbl">T3</span></label>
+    <select id="t2" class="timerSel"></select>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Extras</h2>
+  <div class="row">
+    <label for="voiceEnabled"><span class="lbl">Comando por voz</span><span class="sub">Segurar cabecalho para ouvir</span></label>
+    <span class="toggle"><input type="checkbox" id="voiceEnabled"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+</div>
+
+<div class="save-bar"><button type="button" class="btn" id="saveBtn">Salvar</button></div>
+
+<div class="card">
+  <h2>Manutencao</h2>
+  <div class="grid2">
+    <button type="button" class="btn ghost" id="restartBtn">Reiniciar</button>
+    <button type="button" class="btn danger" id="factoryBtn">Reset de fabrica</button>
+  </div>
+  <p class="desc" style="margin-top:14px;margin-bottom:0">Reset apaga credenciais WiFi e todas as configuracoes. O aparelho abrira o portal de setup.</p>
+</div>
+
+<footer>Pagina ativa apenas enquanto o modo estiver aberto no aparelho.<br>Toque na tela do Cubinho para fechar.</footer>
+
+<div class="toast" id="toast">Salvo!</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = {};
+
+function toast(msg, err){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!err);
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+function bindToggle(id){
+  const el = $('#'+id);
+  el.checked = !!state[id];
+}
+function bindNumber(id){
+  const el = $('#'+id);
+  el.value = state[id];
+  const v = $('#'+id+'_v');
+  if (v) v.textContent = state[id];
+  el.addEventListener('input', ()=>{ if (v) v.textContent = el.value; });
+}
+function bindSelect(id){
+  const el = $('#'+id);
+  el.value = String(state[id]);
+}
+
+function populateTimerSelect(sel, presets, currentIdx){
+  sel.innerHTML = '';
+  presets.forEach((name, i)=>{
+    const opt = document.createElement('option');
+    opt.value = i; opt.textContent = name;
+    if (i === currentIdx) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+async function load(){
+  try {
+    const r = await fetch('/api/state');
+    const d = await r.json();
+    Object.assign(state, d);
+    $('#ip').textContent = d.ip || '--';
+    $('#ssid').textContent = d.ssid || '--';
+    bindNumber('brightnessActive');
+    bindToggle('autoBrightness');
+    bindToggle('nightMode');
+    bindSelect('dimTimeoutSec');
+    bindSelect('deepSleepTimeoutMin');
+    bindToggle('accelWake');
+    bindToggle('wifiKeepAlive');
+    bindSelect('weatherIntervalMin');
+    bindToggle('voiceEnabled');
+    bindToggle('mqttEnabled');
+    $('#mqttHost').value  = d.mqttHost  || '';
+    $('#mqttPort').value  = d.mqttPort  || 1883;
+    $('#mqttUser').value  = d.mqttUser  || '';
+    $('#mqttPass').value  = d.mqttPass  || '';
+    $('#mqttTopic').value = d.mqttTopic || '';
+    $('#calendarUrl').value = d.calendarUrl || '';
+    const presets = d.timerPresets || [];
+    for (let i=0;i<3;i++){
+      populateTimerSelect($('#t'+i), presets, d.timerLabels ? d.timerLabels[i] : 0);
+    }
+  } catch(e){
+    toast('Erro ao carregar', true);
+  }
+}
+
+function collect(){
+  const v = id => $('#'+id);
+  const n = id => parseInt(v(id).value, 10);
+  const b = id => v(id).checked;
+  return {
+    brightnessActive: n('brightnessActive'),
+    autoBrightness: b('autoBrightness'),
+    nightMode: b('nightMode'),
+    dimTimeoutSec: n('dimTimeoutSec'),
+    deepSleepTimeoutMin: n('deepSleepTimeoutMin'),
+    accelWake: b('accelWake'),
+    wifiKeepAlive: b('wifiKeepAlive'),
+    weatherIntervalMin: n('weatherIntervalMin'),
+    voiceEnabled: b('voiceEnabled'),
+    mqttEnabled: b('mqttEnabled'),
+    mqttHost: $('#mqttHost').value.trim(),
+    mqttPort: n('mqttPort') || 1883,
+    mqttUser: $('#mqttUser').value,
+    mqttPass: $('#mqttPass').value,
+    mqttTopic: $('#mqttTopic').value.trim(),
+    calendarUrl: $('#calendarUrl').value.trim(),
+    timerLabels: [n('t0'), n('t1'), n('t2')]
+  };
+}
+
+async function save(){
+  const btn = $('#saveBtn');
+  btn.disabled = true; btn.textContent = 'Salvando...';
+  try {
+    const r = await fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(collect())});
+    if (!r.ok) throw new Error('http '+r.status);
+    toast('Salvo!');
+  } catch(e){
+    toast('Falha ao salvar', true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Salvar';
+  }
+}
+
+async function doAction(path, confirmMsg){
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  try {
+    await fetch(path, {method:'POST'});
+    toast('Enviado');
+  } catch(e){
+    toast('Falha', true);
+  }
+}
+
+$('#saveBtn').addEventListener('click', save);
+$('#restartBtn').addEventListener('click', ()=>doAction('/api/restart', 'Reiniciar o Cubinho?'));
+$('#factoryBtn').addEventListener('click', ()=>doAction('/api/factory', 'Apagar todas as configuracoes e credenciais WiFi?'));
+
+load();
+</script>
+</body></html>)rawliteral";
+
+// Parser de JSON minimalista para o payload esperado (chaves conhecidas,
+// valores booleanos/inteiros/string simples). Retorna true se pelo menos uma
+// chave foi reconhecida.
+static bool webCfgParseBool(const String &body, const char *key, bool &out)
+{
+    String needle = String("\"") + key + "\"";
+    int k = body.indexOf(needle);
+    if (k < 0) return false;
+    int colon = body.indexOf(':', k);
+    if (colon < 0) return false;
+    int i = colon + 1;
+    while (i < (int)body.length() && (body[i] == ' ' || body[i] == '\t')) i++;
+    if (body.startsWith("true", i))  { out = true;  return true; }
+    if (body.startsWith("false", i)) { out = false; return true; }
+    return false;
+}
+
+static bool webCfgParseInt(const String &body, const char *key, int &out)
+{
+    String needle = String("\"") + key + "\"";
+    int k = body.indexOf(needle);
+    if (k < 0) return false;
+    int colon = body.indexOf(':', k);
+    if (colon < 0) return false;
+    int i = colon + 1;
+    while (i < (int)body.length() && (body[i] == ' ' || body[i] == '\t')) i++;
+    int start = i;
+    if (i < (int)body.length() && (body[i] == '-' || body[i] == '+')) i++;
+    while (i < (int)body.length() && isDigit(body[i])) i++;
+    if (i == start) return false;
+    out = body.substring(start, i).toInt();
+    return true;
+}
+
+static bool webCfgParseString(const String &body, const char *key, String &out)
+{
+    String needle = String("\"") + key + "\"";
+    int k = body.indexOf(needle);
+    if (k < 0) return false;
+    int colon = body.indexOf(':', k);
+    if (colon < 0) return false;
+    int q = body.indexOf('"', colon + 1);
+    if (q < 0) return false;
+    out = "";
+    int i = q + 1;
+    while (i < (int)body.length()) {
+        char c = body[i];
+        if (c == '\\' && i + 1 < (int)body.length()) {
+            char n = body[i+1];
+            switch (n) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case '"': out += '"';  break;
+                case '\\': out += '\\'; break;
+                case '/': out += '/';  break;
+                default:  out += n;    break;
+            }
+            i += 2;
+        } else if (c == '"') {
+            return true;
+        } else {
+            out += c;
+            i++;
+        }
+    }
+    return false;
+}
+
+static void webCfgParseIntArray(const String &body, const char *key, int *outArr, int maxLen)
+{
+    String needle = String("\"") + key + "\"";
+    int k = body.indexOf(needle);
+    if (k < 0) return;
+    int open = body.indexOf('[', k);
+    if (open < 0) return;
+    int close = body.indexOf(']', open);
+    if (close < 0) return;
+    int i = open + 1, n = 0;
+    while (i < close && n < maxLen) {
+        while (i < close && (body[i] == ' ' || body[i] == ',' || body[i] == '\t')) i++;
+        int start = i;
+        if (i < close && (body[i] == '-' || body[i] == '+')) i++;
+        while (i < close && isDigit(body[i])) i++;
+        if (i > start) {
+            outArr[n++] = body.substring(start, i).toInt();
+        } else {
+            break;
+        }
+    }
+}
+
+static void startWebConfigServer()
+{
+    stopWebUi();
+
+    _webServer = new WebServer(80);
+    _webServer->on("/", HTTP_GET, []() {
+        _webServer->send_P(200, "text/html; charset=utf-8", WEBCFG_HTML);
+    });
+    _webServer->on("/api/state", HTTP_GET, []() {
+        _webServer->sendHeader("Cache-Control", "no-store");
+        _webServer->send(200, "application/json", webCfgBuildStateJson());
+    });
+    _webServer->on("/api/save", HTTP_POST, []() {
+        RuntimeConfig *cfg = runtimeConfigLive();
+        if (!cfg) {
+            _webServer->send(500, "application/json", "{\"ok\":false,\"error\":\"no-config\"}");
+            return;
+        }
+        String body = _webServer->arg("plain");
+        bool  b;
+        int   i;
+        String s;
+        if (webCfgParseBool(body, "wifiKeepAlive", b))        cfg->wifiKeepAlive = b;
+        if (webCfgParseBool(body, "autoBrightness", b))       cfg->autoBrightness = b;
+        if (webCfgParseBool(body, "nightMode", b))            cfg->nightMode = b;
+        if (webCfgParseBool(body, "accelWake", b))            cfg->accelWake = b;
+        if (webCfgParseBool(body, "voiceEnabled", b))         cfg->voiceEnabled = b;
+        if (webCfgParseInt (body, "weatherIntervalMin", i))   cfg->weatherIntervalMin  = constrain(i, 1, 1440);
+        if (webCfgParseInt (body, "brightnessActive", i))     cfg->brightnessActive    = constrain(i, 0, 255);
+        if (webCfgParseInt (body, "dimTimeoutSec", i))        cfg->dimTimeoutSec       = constrain(i, 5, 3600);
+        if (webCfgParseInt (body, "deepSleepTimeoutMin", i))  cfg->deepSleepTimeoutMin = constrain(i, 0, 1440);
+
+        if (webCfgParseBool  (body, "mqttEnabled", b))        cfg->mqttEnabled = b;
+        if (webCfgParseInt   (body, "mqttPort", i))           cfg->mqttPort    = constrain(i, 1, 65535);
+        if (webCfgParseString(body, "mqttHost", s))  { s.trim(); strlcpy(cfg->mqttHost,  s.c_str(), sizeof(cfg->mqttHost));  }
+        if (webCfgParseString(body, "mqttUser", s))  {          strlcpy(cfg->mqttUser,  s.c_str(), sizeof(cfg->mqttUser));  }
+        if (webCfgParseString(body, "mqttPass", s))  {          strlcpy(cfg->mqttPass,  s.c_str(), sizeof(cfg->mqttPass));  }
+        if (webCfgParseString(body, "mqttTopic", s)) { s.trim(); strlcpy(cfg->mqttTopic, s.c_str(), sizeof(cfg->mqttTopic)); }
+
+        int labels[MAX_TIMERS];
+        for (int j = 0; j < MAX_TIMERS; j++) labels[j] = cfg->timerLabelPreset[j];
+        webCfgParseIntArray(body, "timerLabels", labels, MAX_TIMERS);
+        int presetCount = screenHomeGetTimerLabelPresetCount();
+        for (int j = 0; j < MAX_TIMERS; j++) {
+            if (labels[j] >= 0 && labels[j] < presetCount)
+                cfg->timerLabelPreset[j] = labels[j];
+        }
+
+        if (webCfgParseString(body, "calendarUrl", s)) {
+            s.trim();
+            runtimeConfigSaveCalendarUrl(s.c_str());
+        }
+
+        runtimeConfigSave(*cfg);
+        runtimeConfigApply(*cfg);
+        LOG_I("wifi", "WebConfig: configuracoes salvas via celular");
+
+        _webServer->sendHeader("Cache-Control", "no-store");
+        _webServer->send(200, "application/json", "{\"ok\":true}");
+    });
+    _webServer->on("/api/restart", HTTP_POST, []() {
+        _webServer->send(200, "application/json", "{\"ok\":true}");
+        _webConfigRestartPending = true;
+        _webConfigRestartAtMs = millis() + 800;
+    });
+    _webServer->on("/api/factory", HTTP_POST, []() {
+        _webServer->send(200, "application/json", "{\"ok\":true}");
+        wifiClearStoredCredentials();
+        runtimeConfigClear();
+        runtimeConfigSaveCalendarUrl("");
+        _webConfigRestartPending = true;
+        _webConfigRestartAtMs = millis() + 1200;
+    });
+    _webServer->onNotFound([]() {
+        _webServer->sendHeader("Location", "/");
+        _webServer->send(302, "text/plain", "");
+    });
+    _webServer->begin();
+
+    snprintf(_webConfigAddress, sizeof(_webConfigAddress), "http://%s",
+             WiFi.localIP().toString().c_str());
+    _webConfigMode = true;
+    LOG_I("wifi", "WebConfig ativo em %s", _webConfigAddress);
+}
+
+bool wifiStartWebConfig()
+{
+    if (_portalMode || _calendarConfigMode || _webConfigMode)
+        return false;
+    if (_state != ASYNC_IDLE) {
+        LOG_W("wifi", "WebConfig bloqueado durante atualizacao");
+        return false;
+    }
+    if (!ensureStaConnectedForUi()) return false;
+    startWebConfigServer();
+    return true;
+}
+
+void wifiStopWebConfig()
+{
+    if (!_webConfigMode) return;
+    stopWebUi();
+    if (!_keepAlive) wifiOff();
+    LOG_I("wifi", "WebConfig encerrado manualmente");
+}
+
+bool wifiIsWebConfigMode() { return _webConfigMode; }
+
+void wifiGetWebConfigAddress(char *out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    strlcpy(out, _webConfigAddress, outSize);
 }

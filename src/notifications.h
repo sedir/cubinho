@@ -36,6 +36,14 @@ void notifMarkAllRead();
 void notifServerPoll();                // chamar no loop — inicia/para automaticamente
 bool notifServerIsRunning();
 
+// ── MQTT client — recebe notificacoes publicadas em um topico ────────────────
+// Configurado via RuntimeConfig. So conecta se enabled=true e WiFi disponivel.
+void notifMqttApplyConfig(bool enabled, const char* host, int port,
+                          const char* user, const char* pass,
+                          const char* topic);
+void notifMqttPoll();                  // chamar no loop — gerencia reconexao
+bool notifMqttIsConnected();
+
 // ── Toast (banner breve no topo) ─────────────────────────────────────────────
 bool notifToastActive();
 void notifToastDismiss();

@@ -5,6 +5,8 @@
 #include "power_manager.h"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <WiFiClient.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
 
@@ -552,4 +554,117 @@ bool notifDrawerHandleRelease(int x, int y, int deltaX, int deltaY, bool longPre
     (void)deltaX;
     // Qualquer outro toque dentro do drawer é consumido (nao vaza pra tela de baixo)
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MQTT client
+// ─────────────────────────────────────────────────────────────────────────────
+static WiFiClient   _mqttNet;
+static PubSubClient _mqttClient(_mqttNet);
+
+static bool     _mqttEnabled = false;
+static char     _mqttHost[64]  = "";
+static int      _mqttPort      = 1883;
+static char     _mqttUser[32]  = "";
+static char     _mqttPass[64]  = "";
+static char     _mqttTopic[64] = "";
+
+static uint32_t _mqttLastAttemptMs = 0;
+static uint32_t _mqttBackoffMs     = 2000;
+
+static void mqttOnMessage(char* topic, byte* payload, unsigned int len) {
+    (void)topic;
+    // Aceita JSON {"title":..,"body":..,"icon":..} ou texto simples.
+    char buf[256];
+    size_t n = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
+    memcpy(buf, payload, n);
+    buf[n] = '\0';
+
+    const char* p = buf;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+
+    if (*p == '{') {
+        JsonDocument doc;
+        if (deserializeJson(doc, p) == DeserializationError::Ok) {
+            const char* t = doc["title"] | "";
+            const char* b = doc["body"]  | "";
+            const char* ic = doc["icon"] | "info";
+            if (t && *t) {
+                notifPush(t, b, parseIcon(ic));
+                return;
+            }
+        }
+    }
+    // Fallback: usa payload inteiro como corpo, titulo generico
+    notifPush("MQTT", buf, NOTIF_ICON_INFO);
+}
+
+void notifMqttApplyConfig(bool enabled, const char* host, int port,
+                          const char* user, const char* pass,
+                          const char* topic) {
+    bool hostChanged  = strncmp(_mqttHost,  host  ? host  : "", sizeof(_mqttHost))  != 0;
+    bool portChanged  = (_mqttPort != port);
+    bool topicChanged = strncmp(_mqttTopic, topic ? topic : "", sizeof(_mqttTopic)) != 0;
+    bool userChanged  = strncmp(_mqttUser,  user  ? user  : "", sizeof(_mqttUser))  != 0;
+    bool passChanged  = strncmp(_mqttPass,  pass  ? pass  : "", sizeof(_mqttPass))  != 0;
+    bool enabledChanged = (_mqttEnabled != enabled);
+
+    _mqttEnabled = enabled;
+    strlcpy(_mqttHost,  host  ? host  : "", sizeof(_mqttHost));
+    _mqttPort = (port > 0 && port < 65536) ? port : 1883;
+    strlcpy(_mqttUser,  user  ? user  : "", sizeof(_mqttUser));
+    strlcpy(_mqttPass,  pass  ? pass  : "", sizeof(_mqttPass));
+    strlcpy(_mqttTopic, topic ? topic : "", sizeof(_mqttTopic));
+
+    if (hostChanged || portChanged || userChanged || passChanged ||
+        topicChanged || enabledChanged) {
+        if (_mqttClient.connected()) _mqttClient.disconnect();
+        _mqttClient.setServer(_mqttHost, _mqttPort);
+        _mqttClient.setCallback(mqttOnMessage);
+        _mqttBackoffMs     = 2000;
+        _mqttLastAttemptMs = 0;
+        LOG_I("notif", "MQTT config: %s@%s:%d topic=%s enabled=%d",
+              _mqttUser, _mqttHost, _mqttPort, _mqttTopic, (int)_mqttEnabled);
+    }
+}
+
+bool notifMqttIsConnected() { return _mqttClient.connected(); }
+
+void notifMqttPoll() {
+    if (!_mqttEnabled || _mqttHost[0] == '\0' || _mqttTopic[0] == '\0') {
+        if (_mqttClient.connected()) _mqttClient.disconnect();
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED || !wifiIsKeepAlive() || wifiIsPortalMode()) {
+        if (_mqttClient.connected()) _mqttClient.disconnect();
+        return;
+    }
+
+    if (_mqttClient.connected()) {
+        _mqttClient.loop();
+        return;
+    }
+
+    uint32_t now = millis();
+    if (_mqttLastAttemptMs && (now - _mqttLastAttemptMs) < _mqttBackoffMs) return;
+    _mqttLastAttemptMs = now;
+
+    char clientId[32];
+    snprintf(clientId, sizeof(clientId), "cubinho-%06X",
+             (unsigned)(ESP.getEfuseMac() & 0xFFFFFF));
+
+    bool ok = (_mqttUser[0] != '\0')
+            ? _mqttClient.connect(clientId, _mqttUser, _mqttPass)
+            : _mqttClient.connect(clientId);
+
+    if (ok) {
+        _mqttClient.subscribe(_mqttTopic);
+        _mqttBackoffMs = 2000;
+        LOG_I("notif", "MQTT conectado — sub %s", _mqttTopic);
+    } else {
+        // backoff exponencial com teto em 60s
+        _mqttBackoffMs = (_mqttBackoffMs < 60000) ? (_mqttBackoffMs * 2) : 60000;
+        LOG_W("notif", "MQTT falha (rc=%d) backoff=%lums", _mqttClient.state(),
+              (unsigned long)_mqttBackoffMs);
+    }
 }

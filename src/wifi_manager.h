@@ -26,6 +26,12 @@ void wifiStopCalendarConfig();
 bool wifiIsCalendarConfigMode();
 void wifiGetCalendarConfigAddress(char* out, size_t outSize);
 
+// Portal unificado de configuracao via celular (tela de QR Code)
+bool wifiStartWebConfig();
+void wifiStopWebConfig();
+bool wifiIsWebConfigMode();
+void wifiGetWebConfigAddress(char* out, size_t outSize);
+
 // Credenciais armazenadas em NVS (item #23)
 bool wifiHasStoredCredentials();
 void wifiClearStoredCredentials();
