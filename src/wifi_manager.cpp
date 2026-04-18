@@ -608,6 +608,8 @@ void wifiSetKeepAlive(bool keep)
     }
 }
 
+bool wifiIsKeepAlive() { return _keepAlive; }
+
 int wifiGetRSSI()
 {
     if (WiFi.status() != WL_CONNECTED)
@@ -717,6 +719,12 @@ static String webCfgBuildStateJson()
         json += F(",\"accelWake\":");           json += (cfg->accelWake           ? F("true") : F("false"));
         json += F(",\"voiceEnabled\":");        json += (cfg->voiceEnabled        ? F("true") : F("false"));
         json += F(",\"nightMode\":");           json += (cfg->nightMode           ? F("true") : F("false"));
+        json += F(",\"mqttEnabled\":");         json += (cfg->mqttEnabled         ? F("true") : F("false"));
+        json += F(",\"mqttHost\":\"");          json += webCfgJsonEscape(cfg->mqttHost);  json += F("\"");
+        json += F(",\"mqttPort\":");            json += cfg->mqttPort;
+        json += F(",\"mqttUser\":\"");          json += webCfgJsonEscape(cfg->mqttUser);  json += F("\"");
+        json += F(",\"mqttPass\":\"");          json += webCfgJsonEscape(cfg->mqttPass);  json += F("\"");
+        json += F(",\"mqttTopic\":\"");         json += webCfgJsonEscape(cfg->mqttTopic); json += F("\"");
         json += F(",\"timerLabels\":[");
         for (int i = 0; i < MAX_TIMERS; i++) {
             if (i) json += ',';
@@ -868,6 +876,35 @@ footer a{color:var(--accent)}
 </div>
 
 <div class="card">
+  <h2>Notificacoes MQTT</h2>
+  <p class="desc">Recebe notificacoes publicadas em um broker MQTT. Requer WiFi permanente.</p>
+  <div class="row">
+    <label for="mqttEnabled"><span class="lbl">Ativar MQTT</span><span class="sub">Conecta ao broker e inscreve no topico</span></label>
+    <span class="toggle"><input type="checkbox" id="mqttEnabled"><span class="track"></span><span class="thumb"></span></span>
+  </div>
+  <div class="row field">
+    <label><span class="lbl">Host</span><span class="sub">Ex: broker.hivemq.com ou 192.168.1.10</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttHost" placeholder="broker.exemplo.com" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Porta</span><span class="sub">Padrao 1883 (sem TLS)</span></label>
+  </div>
+  <div class="fieldrow"><input type="number" id="mqttPort" min="1" max="65535" placeholder="1883"></div>
+  <div class="row field">
+    <label><span class="lbl">Topico</span><span class="sub">Ex: cubinho/notif</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttTopic" placeholder="cubinho/notif" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Usuario</span><span class="sub">Opcional</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttUser" autocomplete="off" spellcheck="false"></div>
+  <div class="row field">
+    <label><span class="lbl">Senha</span><span class="sub">Opcional</span></label>
+  </div>
+  <div class="fieldrow"><input type="text" id="mqttPass" autocomplete="off" spellcheck="false"></div>
+</div>
+
+<div class="card">
   <h2>Calendario</h2>
   <p class="desc">URL privada de um feed iCal/ICS. Deixe em branco para desativar.</p>
   <div class="row field">
@@ -972,6 +1009,12 @@ async function load(){
     bindToggle('wifiKeepAlive');
     bindSelect('weatherIntervalMin');
     bindToggle('voiceEnabled');
+    bindToggle('mqttEnabled');
+    $('#mqttHost').value  = d.mqttHost  || '';
+    $('#mqttPort').value  = d.mqttPort  || 1883;
+    $('#mqttUser').value  = d.mqttUser  || '';
+    $('#mqttPass').value  = d.mqttPass  || '';
+    $('#mqttTopic').value = d.mqttTopic || '';
     $('#calendarUrl').value = d.calendarUrl || '';
     const presets = d.timerPresets || [];
     for (let i=0;i<3;i++){
@@ -996,6 +1039,12 @@ function collect(){
     wifiKeepAlive: b('wifiKeepAlive'),
     weatherIntervalMin: n('weatherIntervalMin'),
     voiceEnabled: b('voiceEnabled'),
+    mqttEnabled: b('mqttEnabled'),
+    mqttHost: $('#mqttHost').value.trim(),
+    mqttPort: n('mqttPort') || 1883,
+    mqttUser: $('#mqttUser').value,
+    mqttPass: $('#mqttPass').value,
+    mqttTopic: $('#mqttTopic').value.trim(),
     calendarUrl: $('#calendarUrl').value.trim(),
     timerLabels: [n('t0'), n('t1'), n('t2')]
   };
@@ -1156,6 +1205,13 @@ static void startWebConfigServer()
         if (webCfgParseInt (body, "brightnessActive", i))     cfg->brightnessActive    = constrain(i, 0, 255);
         if (webCfgParseInt (body, "dimTimeoutSec", i))        cfg->dimTimeoutSec       = constrain(i, 5, 3600);
         if (webCfgParseInt (body, "deepSleepTimeoutMin", i))  cfg->deepSleepTimeoutMin = constrain(i, 0, 1440);
+
+        if (webCfgParseBool  (body, "mqttEnabled", b))        cfg->mqttEnabled = b;
+        if (webCfgParseInt   (body, "mqttPort", i))           cfg->mqttPort    = constrain(i, 1, 65535);
+        if (webCfgParseString(body, "mqttHost", s))  { s.trim(); strlcpy(cfg->mqttHost,  s.c_str(), sizeof(cfg->mqttHost));  }
+        if (webCfgParseString(body, "mqttUser", s))  {          strlcpy(cfg->mqttUser,  s.c_str(), sizeof(cfg->mqttUser));  }
+        if (webCfgParseString(body, "mqttPass", s))  {          strlcpy(cfg->mqttPass,  s.c_str(), sizeof(cfg->mqttPass));  }
+        if (webCfgParseString(body, "mqttTopic", s)) { s.trim(); strlcpy(cfg->mqttTopic, s.c_str(), sizeof(cfg->mqttTopic)); }
 
         int labels[MAX_TIMERS];
         for (int j = 0; j < MAX_TIMERS; j++) labels[j] = cfg->timerLabelPreset[j];

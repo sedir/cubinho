@@ -23,6 +23,7 @@
 #include "chime_wav.h"
 #include "qr_scanner.h"
 #include "voice_cmd.h"
+#include "notifications.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
@@ -339,8 +340,8 @@ void setup() {
     initSprite();
 
     // ── Splash com progresso (apenas cold boot) ─────────────────────────────
-    // Total de passos: 8 locais + até 4 do WiFi (connect, NTP, clima, calendario)
-    static const int SPLASH_TOTAL = 12;
+    // Total de passos: 9 locais + até 4 do WiFi (connect, NTP, clima, calendario)
+    static const int SPLASH_TOTAL = 13;
     static int       splashStep   = 0;
 
     // Macro para atualizar splash apenas no cold boot
@@ -376,6 +377,9 @@ void setup() {
 
     SPLASH("Rede...");
     bgNetworkInit();
+
+    SPLASH("Notificacoes...");
+    notifInit();
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
@@ -466,6 +470,9 @@ void loop() {
     telnetLogUpdate();
     wifiPortalUpdate();   // item #23
     otaUpdate();          // item #21
+    notifServerPoll();    // HTTP push server (atrelado ao WiFi keep-alive)
+    notifMqttPoll();      // cliente MQTT (idem)
+    notifDrawerUpdate();  // anima gaveta de notificacoes
 
     bool portalMode = wifiIsPortalMode();
     bool calendarConfigMode = wifiIsCalendarConfigMode();
@@ -527,6 +534,29 @@ void loop() {
         int      swipeDeltaX = touch.x - touchStartX;
         int      swipeDeltaY = touch.y - touchStartY;
         bool     isSwipe     = (abs(swipeDeltaX) >= 30 && abs(swipeDeltaX) > abs(swipeDeltaY));
+
+        // ── Gaveta de notificacoes (prioridade maxima no roteamento) ─────────
+        // Se ja aberta: consome os toques e trata scroll/fechar/limpar.
+        if (notifDrawerIsOpen()) {
+            if (notifDrawerHandleRelease(touchStartX, touchStartY,
+                                         swipeDeltaX, swipeDeltaY, longPress)) {
+                needsRedraw = true;
+            }
+            return;
+        }
+        // Swipe de abertura: borda superior + gesto para baixo.
+        if (notifShouldOpenFromSwipe(touchStartY, swipeDeltaX, swipeDeltaY)) {
+            notifDrawerOpen();
+            needsRedraw = true;
+            return;
+        }
+        // Tap em toast ativo: abre a gaveta direto.
+        if (notifToastActive() && touchStartY < 50 && !isSwipe && !longPress) {
+            notifToastDismiss();
+            notifDrawerOpen();
+            needsRedraw = true;
+            return;
+        }
 
         // Teclado on-screen intercepta todos os toques quando ativo
         if (currentScreen == 0 && screenHomeIsKeyboardActive()) {
@@ -708,8 +738,9 @@ void loop() {
 
     // ── Dim ──
     bool wasDim = powerIsDim();
-    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() || screenHomeIsStopwatchRunning()
-                || wifiIsWebConfigMode() || wifiIsCalendarConfigMode());
+    powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() ||
+                screenHomeIsStopwatchRunning() || notifDrawerIsVisible() ||
+                wifiIsWebConfigMode() || wifiIsCalendarConfigMode());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ──
@@ -725,8 +756,9 @@ void loop() {
 
     // ── Deep sleep ──
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
-        !screenHomeIsStopwatchRunning() && !wifiIsWebConfigMode() &&
-        !wifiIsCalendarConfigMode() && powerShouldDeepSleep()) {
+        !screenHomeIsStopwatchRunning() && !notifDrawerIsVisible() &&
+        !wifiIsWebConfigMode() && !wifiIsCalendarConfigMode() &&
+        powerShouldDeepSleep()) {
 
         LOG_I("main", "Deep sleep — salvando estado");
         rtcScreen  = currentScreen;
@@ -860,13 +892,22 @@ void loop() {
         }
     }
 
+    // ── Gaveta de notificacoes: animacao ou toast forcam redesenho ──
+    bool notifDrawerVisible = notifDrawerIsVisible();
+    bool notifAnimating     = notifDrawerIsAnimating();
+    bool toastActive        = notifToastActive();
+    if (notifAnimating) { needsRedraw = true; powerBoostCpu(); }
+
     if (powerIsDim() && !needsRedraw) { delay(150); return; }
 
     uint32_t now = millis();
     uint32_t refreshRate = (currentScreen == 0) ? 1000u : 5000u;
+    if (toastActive || notifDrawerVisible) refreshRate = 1000u;  // atualiza "tempo ago"
     bool timeToRefresh = (now - lastDrawMs >= (alarmActive ? 400u : refreshRate));
     if (needsRedraw || timeToRefresh) {
         drawCurrentScreen(*fb);
+        if (notifDrawerVisible)      notifDrawerDraw(*fb);
+        else if (toastActive)        notifToastDraw(*fb);
         pushFrame();
         lastDrawMs  = now;
         needsRedraw = false;
@@ -874,5 +915,7 @@ void loop() {
 
     // Durante animação de scroll: 16ms (~60fps) para suavidade máxima.
     // Alarme: 20ms para piscar sincronizado. Normal: 50ms (~20fps é suficiente).
-    delay(scrollAnimating ? 16 : (alarmActive ? 20 : 50));
+    int frameDelay = scrollAnimating ? 16 : (alarmActive ? 20 : 50);
+    if (notifAnimating) frameDelay = 16;
+    delay(frameDelay);
 }

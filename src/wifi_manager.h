@@ -12,6 +12,7 @@ bool wifiConnectAndFetch(WeatherData& out);
 bool wifiIsFetching();
 bool wifiBgJustCompleted();   // true uma vez após fetch de background concluir
 void wifiSetKeepAlive(bool keep);
+bool wifiIsKeepAlive();
 int  wifiGetRSSI();
 void wifiForceRefresh(WeatherData& weatherData);  // dispara atualização imediata
 void wifiSetUpdateInterval(uint32_t ms);          // altera intervalo de atualização em runtime

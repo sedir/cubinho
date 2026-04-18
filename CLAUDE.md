@@ -1,5 +1,26 @@
 # M5 CoreS3 — Cubinho
 
+> **Manutenção da documentação (regra do agente)**
+>
+> Antes de concluir qualquer tarefa que altere os pontos abaixo, atualize este arquivo **e** o `README.md` quando aplicável. Verificação obrigatória no final de cada PR — se o diff mexe em um dos gatilhos, o CLAUDE.md tem que estar no commit.
+>
+> Gatilhos que exigem atualização dos MDs:
+> - Nova lib em `platformio.ini` (ou remoção/upgrade com mudança de API)
+> - Novo arquivo `.cpp`/`.h` em `src/` (atualizar árvore de arquivos)
+> - Novo campo em `RuntimeConfig` (atualizar tabela de Configurações)
+> - Nova tela ou remoção de tela (`screen_*`) — atualizar lista de telas e `SCREEN_COUNT`
+> - Mudança em protocolo de rede (novo endpoint HTTP, MQTT, WebSocket, etc.)
+> - Novo hardware exposto (sensor, periférico I2C, GPIO novo)
+> - Mudança em comportamento de energia (dim/deep sleep/wake-lock)
+> - Mudança em `config.h` defaults que o usuário precisa conhecer
+> - Novo gesto de toque ou swipe com zona/prioridade dedicada
+> - Mudança em layout de UI relevante (tabelas/diagramas ASCII das telas)
+> - Alteração em `SPLASH_TOTAL` / ordem de boot
+>
+> Ao abrir PR, a descrição deve mencionar explicitamente "CLAUDE.md atualizado" (ou "sem impacto em CLAUDE.md" com justificativa). O `ENERGY.md` segue a mesma regra quando a mudança afeta consumo ou ciclo de energia.
+
+---
+
 ## Visão geral do projeto
 
 Firmware para M5 CoreS3 fixado na porta da geladeira via módulo magnético.
@@ -24,7 +45,8 @@ Atualização automática do clima a cada 30 minutos (WiFi intermitente ou keep-
   - `M5GFX` / `lgfx` (rendering — inclusa no M5Unified)
   - `ArduinoJson ^7` (parse JSON da OpenMeteo)
   - `FastLED` (LEDs WS2812 do M5GO3 Bottom)
-  - `WiFi.h`, `HTTPClient.h`, `time.h`, `Preferences.h` (built-in ESP32)
+  - `PubSubClient` (cliente MQTT para notificações push)
+  - `WiFi.h`, `WebServer.h`, `HTTPClient.h`, `time.h`, `Preferences.h` (built-in ESP32)
 
 ---
 
@@ -42,6 +64,7 @@ lib_deps =
   m5stack/M5Unified @ ^0.2.2
   bblanchon/ArduinoJson @ ^7.0.0
   fastled/FastLED @ ^3.7.0
+  knolleary/PubSubClient @ ^2.8
 
 build_flags =
   -DCORE_DEBUG_LEVEL=0
@@ -73,6 +96,7 @@ src/
 ├── telnet_log.h/.cpp       ← log via Telnet porta 23 + SD card
 ├── ota_manager.h/.cpp      ← ArduinoOTA (ativo com WiFi keep-alive)
 ├── events.h/.cpp           ← agenda de eventos lida do SD card (/events.json)
+├── notifications.h/.cpp    ← push notifications (HTTP + MQTT) + toast + gaveta
 └── chime_wav.h             ← audio WAV do alarme (array PROGMEM)
 ```
 
@@ -244,6 +268,11 @@ Lista de opções com scroll vertical (lerp ease-out). Persistidas em NVS via `R
 | `autoBrightness` | bool | Auto-brilho via sensor ALS |
 | `deepSleepTimeoutMin` | int | Minutos até deep sleep (0 = nunca) |
 | `accelWake` | bool | Acorda do dim ao detectar movimento |
+| `mqttEnabled` | bool | Habilita cliente MQTT para notificações push |
+| `mqttHost` | char[64] | Host do broker (ex: `broker.hivemq.com`) |
+| `mqttPort` | int | Porta do broker (default 1883) |
+| `mqttUser` / `mqttPass` | char[] | Credenciais opcionais |
+| `mqttTopic` | char[64] | Tópico de subscrição (ex: `cubinho/notif`) |
 
 **Tap** → altera valor / toggle. **Long press** → ações destrutivas (ex: factory reset NVS, limpar credenciais WiFi). **Swipe direita** → volta para tela System (tela 2). **Swipe esquerda** → ignorado.
 
@@ -299,6 +328,11 @@ wasReleased() → calcula held = millis() - touchStartMs
                 longPress = (held >= 800ms)
                 isSwipe = (|deltaX| >= 30 && |deltaX| > |deltaY|)
 
+Gaveta de notificações (prioridade máxima, antes de qualquer tela):
+  Aberta → notifDrawerHandleRelease() consome o evento
+  Fechada + swipe da borda superior (notifShouldOpenFromSwipe) → notifDrawerOpen()
+  Toast ativo + tap no topo → dismiss + abre gaveta
+
 Swipe horizontal → animateTransition() para tela anterior/próxima
   Tela 3 (Settings): swipe direita → volta para System (tela 2); esquerda ignorado
 
@@ -346,6 +380,10 @@ POWER_DIM     →  deep sleep após deepSleepTimeoutMs (se timer não estiver at
 **Deep sleep**: estado RTC preserva tela atual, dados do clima e estado dos 3 timers. Wake por:
 - Toque (EXT0, GPIO21, INT do FT6336U — ativo em LOW)
 - Timer a cada 30 min → atualiza clima silenciosamente e volta a dormir
+
+**Wake-lock por fonte externa**: `powerIsOnExternalPower()` retorna true quando `M5.Power.isCharging()` ou quando `batteryLevel >= 100` (carregador plugado com bateria cheia). Nesse caso `powerShouldDeepSleep()` retorna false — o aparelho fica sempre aceso enquanto conectado. Útil para manter notificações push recebendo em tempo real.
+
+Também bloqueiam dim/deep sleep: alarme ativo, timer ou cronômetro rodando, gaveta de notificações visível, página unificada de configuração aberta.
 
 Em `POWER_DIM`: WiFi e atualizações de clima continuam. Display não redesenha (exceto relógio, 1×/min).
 
@@ -422,6 +460,43 @@ WiFi permanece conectado → habilita OTA, Telnet e atualizações contínuas.
 
 Timeout de conexão: 10s. Se falhar, mantém último dado válido e tenta no próximo ciclo.
 NTP: sincronizado apenas no boot e após reconexões — RTC interno tem drift desprezível em 30 min.
+
+---
+
+## Notificações push (`notifications`)
+
+Dois protocolos recebem mensagens e entregam ao mesmo `notifPush()`. Ambos exigem **WiFi keep-alive** — sem ele o rádio fica desligado a maior parte do tempo e nenhum dos servidores sobe. Não funcionam em deep sleep (CPU desligada).
+
+### HTTP server — porta 8080
+
+`WebServer` separado do da porta 80 (que é usada pelo portal cativo e pela página unificada de config). Iniciado/parado por `notifServerPoll()` no loop conforme `WL_CONNECTED && wifiIsKeepAlive() && !wifiIsPortalMode()`.
+
+Endpoints:
+- `GET /` — formulário HTML de teste
+- `POST /notify` — JSON `{title, body, icon}` ou form urlencoded (campos iguais)
+- `GET /list` — JSON com histórico
+- `POST /clear` — limpa tudo
+
+Uso típico: iOS Shortcuts, `curl`, webhooks locais na LAN.
+
+### Cliente MQTT
+
+`PubSubClient` conecta ao broker configurado em `RuntimeConfig` (`mqttEnabled`, `mqttHost`, `mqttPort`, `mqttUser`, `mqttPass`, `mqttTopic`). Reconexão com backoff exponencial (2s → 60s). Payload aceita:
+- JSON `{"title":"..","body":"..","icon":"info|ok|warn|error"}`
+- Texto puro (usa como corpo, título vira "MQTT")
+
+Vantagem sobre HTTP: atravessa NAT (outbound pro broker) — ideal pra Home Assistant, n8n, IFTTT via bridge. Configuração via página web (`/api/state` e `/api/save`).
+
+### Storage e UI
+
+- Histórico circular de até `NOTIF_MAX = 12` em RAM; `notifPush()` empurra novas no índice 0.
+- **Toast** de 5s no topo ao receber nova notificação; chama `powerOnTouch()` pra acordar o display.
+- **Gaveta** (drawer): swipe da borda superior abre. Animação ease-out cúbico em `notifDrawerUpdate()`. Exibe até 3 itens; overflow mostra "+ N mais…". Swipe-up, X ou botão Limpar fecham. Long press na lista limpa tudo.
+- Gaveta visível bloqueia dim/deep sleep.
+
+### Ícones
+
+`NotifIcon { INFO, WARN, ERROR, OK }` — mapeados pra cores (azul/laranja/vermelho/verde) e glifos (`i/!/x/v`).
 
 ---
 

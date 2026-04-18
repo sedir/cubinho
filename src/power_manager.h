@@ -24,6 +24,11 @@ int batteryPercent();
 // Retorna true se a bateria está carregando.
 bool batteryIsCharging();
 
+// Retorna true se o dispositivo está recebendo energia de fonte externa
+// (carregando OU conectado ao carregador com bateria a 100%). Quando true,
+// powerShouldDeepSleep() retorna false para manter o aparelho sempre aceso.
+bool powerIsOnExternalPower();
+
 // Retorna true se o tempo sem toque excedeu DEEP_SLEEP_TIMEOUT_MS.
 bool powerShouldDeepSleep();
 
