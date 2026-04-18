@@ -12,6 +12,15 @@
 
 static Preferences _prefs;
 static char _calendarUrl[192] = CALENDAR_ICS_URL;
+static RuntimeConfig* _liveCfg = nullptr;
+
+void runtimeConfigRegisterLive(RuntimeConfig* cfg) {
+    _liveCfg = cfg;
+}
+
+RuntimeConfig* runtimeConfigLive() {
+    return _liveCfg;
+}
 
 void runtimeConfigLoad(RuntimeConfig& cfg) {
     _prefs.begin("cfg", true);  // read-only

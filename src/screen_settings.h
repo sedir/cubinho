@@ -29,3 +29,5 @@ bool screenSettingsIsConfirmOpen();
 // Tela do portal WiFi — exibida em fullscreen quando wifiIsPortalMode() == true.
 void drawWifiPortalScreen(lgfx::LovyanGFX& display);
 void drawCalendarConfigScreen(lgfx::LovyanGFX& display);
+// Tela fullscreen exibida enquanto o portal de configuracao via celular esta aberto.
+void drawWebConfigScreen(lgfx::LovyanGFX& display);
