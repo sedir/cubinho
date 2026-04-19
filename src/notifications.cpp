@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "wifi_manager.h"
 #include "power_manager.h"
+#include "ha_discovery.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WiFiClient.h>
@@ -38,6 +39,15 @@ static float _drawerTarget   = 0.0f;
 
 // ── HTTP server ──────────────────────────────────────────────────────────────
 static WebServer* _server = nullptr;
+
+// ── Telemetria compartilhada com /health ─────────────────────────────────────
+static unsigned _bootCount        = 0;
+static uint32_t _lastWeatherMs    = 0;     // millis() da ultima fetch ok
+static uint32_t _lastMqttMsgMs    = 0;     // millis() da ultima mensagem MQTT
+
+void notifSetBootCount(unsigned count) { _bootCount = count; }
+unsigned notifGetBootCount()           { return _bootCount; }
+void notifMarkWeatherFetch()           { _lastWeatherMs = millis(); }
 
 // ── Utilidades ───────────────────────────────────────────────────────────────
 static NotifIcon parseIcon(const char* s) {
@@ -219,6 +229,62 @@ static void handleClear() {
     _server->send(200, "application/json", "{\"ok\":true}");
 }
 
+// /health — telemetria JSON para diagnostico remoto sem Telnet.
+// Expoe: uptime, heap livre, RSSI, IP, ultima atualizacao de clima, status MQTT,
+// boot count e notificacoes acumuladas.
+static void handleHealth() {
+    uint32_t nowMs       = millis();
+    uint32_t uptimeSec   = nowMs / 1000UL;
+    uint32_t freeHeap    = ESP.getFreeHeap();
+    uint32_t minHeap     = ESP.getMinFreeHeap();
+    uint32_t freePsram   = ESP.getFreePsram();
+    int      rssi        = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+
+    long weatherAgeSec = -1;
+    if (_lastWeatherMs != 0) {
+        weatherAgeSec = (long)((nowMs - _lastWeatherMs) / 1000UL);
+    }
+    long mqttLastMsgSec = -1;
+    if (_lastMqttMsgMs != 0) {
+        mqttLastMsgSec = (long)((nowMs - _lastMqttMsgMs) / 1000UL);
+    }
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{"
+        "\"ok\":true,"
+        "\"uptime_s\":%lu,"
+        "\"boot_count\":%u,"
+        "\"free_heap\":%lu,"
+        "\"min_free_heap\":%lu,"
+        "\"free_psram\":%lu,"
+        "\"ssid\":\"%s\","
+        "\"ip\":\"%s\","
+        "\"rssi\":%d,"
+        "\"weather_age_s\":%ld,"
+        "\"mqtt_connected\":%s,"
+        "\"mqtt_last_msg_s\":%ld,"
+        "\"notif_count\":%d,"
+        "\"notif_unread\":%d"
+        "}",
+        (unsigned long)uptimeSec,
+        _bootCount,
+        (unsigned long)freeHeap,
+        (unsigned long)minHeap,
+        (unsigned long)freePsram,
+        WiFi.SSID().c_str(),
+        WiFi.localIP().toString().c_str(),
+        rssi,
+        weatherAgeSec,
+        notifMqttIsConnected() ? "true" : "false",
+        mqttLastMsgSec,
+        _count,
+        notifGetUnreadCount());
+
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(200, "application/json", json);
+}
+
 static void handleNotFound() {
     _server->send(404, "application/json", "{\"ok\":false,\"error\":\"not-found\"}");
 }
@@ -231,6 +297,7 @@ static void startServer() {
     _server->on("/notify", HTTP_POST, handleNotify);
     _server->on("/list",   HTTP_GET,  handleList);
     _server->on("/clear",  HTTP_POST, handleClear);
+    _server->on("/health", HTTP_GET,  handleHealth);
     _server->onNotFound(handleNotFound);
     _server->begin();
     LOG_I("notif", "Servidor push ativo — http://%s:%d/",
@@ -574,6 +641,7 @@ static uint32_t _mqttBackoffMs     = 2000;
 
 static void mqttOnMessage(char* topic, byte* payload, unsigned int len) {
     (void)topic;
+    _lastMqttMsgMs = millis();  // telemetria /health
     // Aceita JSON {"title":..,"body":..,"icon":..} ou texto simples.
     char buf[256];
     size_t n = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
@@ -642,6 +710,7 @@ void notifMqttPoll() {
 
     if (_mqttClient.connected()) {
         _mqttClient.loop();
+        haDiscoveryPublishStates();  // atualiza estados (auto-throttle interno 30s)
         return;
     }
 
@@ -661,10 +730,35 @@ void notifMqttPoll() {
         _mqttClient.subscribe(_mqttTopic);
         _mqttBackoffMs = 2000;
         LOG_I("notif", "MQTT conectado — sub %s", _mqttTopic);
+        // HA discovery: publica configs das entidades assim que conectar.
+        haDiscoveryPublishConfigs();
     } else {
-        // backoff exponencial com teto em 60s
-        _mqttBackoffMs = (_mqttBackoffMs < 60000) ? (_mqttBackoffMs * 2) : 60000;
-        LOG_W("notif", "MQTT falha (rc=%d) backoff=%lums", _mqttClient.state(),
-              (unsigned long)_mqttBackoffMs);
+        // Backoff exponencial com teto em 60s, somado a jitter aleatorio
+        // (+/- 25% do valor atual). Evita "thundering herd" quando o broker
+        // cai e muitos dispositivos tentam reconectar simultaneamente.
+        uint32_t base = (_mqttBackoffMs < 60000) ? (_mqttBackoffMs * 2) : 60000;
+        long jitterRange = (long)(base / 4);  // +/- 25%
+        long jitter = jitterRange > 0 ? (random(-jitterRange, jitterRange + 1)) : 0;
+        long next = (long)base + jitter;
+        if (next < 1000) next = 1000;        // piso de seguranca
+        if (next > 90000) next = 90000;      // teto inclui jitter positivo
+        _mqttBackoffMs = (uint32_t)next;
+        LOG_W("notif", "MQTT falha (rc=%d) backoff=%lums (base=%lu +jitter=%ld)",
+              _mqttClient.state(), (unsigned long)_mqttBackoffMs,
+              (unsigned long)base, jitter);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MQTT publish helper (usado por HA discovery e telemetria)
+// ─────────────────────────────────────────────────────────────────────────────
+bool notifMqttPublish(const char* topic, const char* payload, bool retained) {
+    if (!_mqttClient.connected()) return false;
+    if (!topic || !payload) return false;
+    return _mqttClient.publish(topic, payload, retained);
+}
+
+const char* notifMqttGetTopicBase() {
+    // Retorna o tópico de subscrição para uso na detecção do prefixo HA.
+    return _mqttTopic;
 }

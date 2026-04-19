@@ -65,3 +65,15 @@ void powerSetAccelWake(bool enabled);
 
 // Retorna true se o wake via acelerômetro está habilitado.
 bool powerIsAccelWakeEnabled();
+
+// ── Modo cozinha ativa ──────────────────────────────────────────────────────
+// Mantem o display aceso por durationMs (default 1h), bloqueando dim e deep
+// sleep. Uso tipico: usuario vai cozinhar e quer relogio + timer sempre
+// visiveis sem precisar tocar na tela. Chame novamente para renovar o prazo.
+#define COOKING_MODE_DEFAULT_MS  (60UL * 60UL * 1000UL)   // 1 hora
+
+void     powerEnableCookingMode(uint32_t durationMs = COOKING_MODE_DEFAULT_MS);
+void     powerDisableCookingMode();
+bool     powerIsCookingMode();
+// Retorna tempo restante em ms (0 se inativo).
+uint32_t powerCookingModeRemainingMs();

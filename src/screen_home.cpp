@@ -3,6 +3,8 @@
 #include "theme.h"
 #include "config.h"
 #include "logger.h"
+#include "power_manager.h"
+#include "i18n.h"
 #include <time.h>
 #include <math.h>
 
@@ -667,7 +669,24 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         display.setFont(&fonts::FreeSans9pt7b);
         display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
         display.setTextDatum(MC_DATUM);
-        display.drawString("atualizando...", display.width() / 2, 104);
+        display.drawString(T(SCREEN_HOME_SYNC), display.width() / 2, 104);
+    }
+
+    // --- Modo cozinha ativa (wake-lock) ---
+    if (powerIsCookingMode()) {
+        uint32_t remMs  = powerCookingModeRemainingMs();
+        int      remMin = (int)((remMs + 59999UL) / 60000UL);   // arredonda pra cima
+        char badge[24];
+        snprintf(badge, sizeof(badge), "%s  %dmin", T(COOKING_BADGE_PREFIX), remMin);
+        display.setFont(&fonts::Font0);
+        display.setTextDatum(MC_DATUM);
+        int cx = display.width() / 2;
+        int by = 104;
+        int tw = display.textWidth(badge) + 14;
+        int th = 14;
+        display.fillRoundRect(cx - tw/2, by - th/2, tw, th, 4, 0xFD20);  // laranja
+        display.setTextColor(COLOR_BACKGROUND, 0xFD20);
+        display.drawString(badge, cx, by);
     }
 
     // --- Divisor ---
@@ -683,11 +702,11 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         display.setFont(&fonts::FreeSansBold18pt7b);
         display.setTextColor(flash, COLOR_BACKGROUND);
         display.setTextDatum(MC_DATUM);
-        display.drawString("PRONTO!", display.width() / 2, TIMER_VALUE_Y);
+        display.drawString(T(SCREEN_HOME_READY), display.width() / 2, TIMER_VALUE_Y);
 
         display.setFont(&fonts::FreeSans9pt7b);
         display.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-        display.drawString("toque para fechar", display.width() / 2, TIMER_HINT_Y);
+        display.drawString(T(SCREEN_HOME_CLOSE), display.width() / 2, TIMER_HINT_Y);
     } else {
 
         // Slot tabs — altura 20 px, fáceis de tocar
@@ -709,7 +728,7 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
             display.setFont(&fonts::Font0);
             display.setTextColor(swColor, COLOR_BACKGROUND);
             display.setTextDatum(MC_DATUM);
-            display.drawString("SW · Cronometro", display.width() / 2, TIMER_LABEL_Y);
+            display.drawString(T(TIMER_STOPWATCH), display.width() / 2, TIMER_LABEL_Y);
 
             char swBuf[16];
             uint32_t h  = elapsed / 3600000;
@@ -749,9 +768,9 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
             display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
             display.setTextDatum(MC_DATUM);
             if (g_swState == SW_IDLE)
-                display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+                display.drawString(T(TIMER_HINT_START), display.width() / 2, TIMER_HINT_Y);
             else
-                display.drawString("Segurar: zerar", display.width() / 2, TIMER_HINT_Y);
+                display.drawString(T(TIMER_HINT_RESET), display.width() / 2, TIMER_HINT_Y);
 
         } else {
             // ── Timer regressivo ─────────────────────────────────────────────
@@ -804,14 +823,14 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
                     display.setFont(&fonts::FreeSans9pt7b);
                     display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
                     display.setTextDatum(MC_DATUM);
-                    display.drawString("Segurar: iniciar", display.width() / 2, TIMER_HINT_Y);
+                    display.drawString(T(TIMER_HINT_START), display.width() / 2, TIMER_HINT_Y);
                 }
             } else if (timerStates[s] == TIMER_PAUSED) {
                 if (!hasOtherSummary) {
                     display.setFont(&fonts::FreeSans9pt7b);
                     display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
                     display.setTextDatum(MC_DATUM);
-                    display.drawString("Segurar: zerar", display.width() / 2, TIMER_HINT_Y);
+                    display.drawString(T(TIMER_HINT_RESET), display.width() / 2, TIMER_HINT_Y);
                 }
             }
         }

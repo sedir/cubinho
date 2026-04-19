@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_pm.h>
+#include <esp_task_wdt.h>
 #include "config.h"
 #include "theme.h"
 #include "logger.h"
@@ -441,6 +442,7 @@ void setup() {
 
     rtcBootCount++;
     telnetLogSetBoot(rtcBootCount);
+    notifSetBootCount(rtcBootCount);
     needsRedraw = true;
     updateNextEvent();  // item #24
 
@@ -457,6 +459,21 @@ void setup() {
     };
     esp_pm_configure(&pm_cfg);
 
+    // Watchdog — protecao contra hang em HTTP/MQTT/I2C travados.
+    // Timeout generoso (30s) cobre fetch NTP + clima + calendario numa leva.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    esp_task_wdt_config_t wdt_cfg = {
+        .timeout_ms     = 30000,
+        .idle_core_mask = 0,
+        .trigger_panic  = true,
+    };
+    esp_task_wdt_reconfigure(&wdt_cfg);
+#else
+    esp_task_wdt_init(30, true);
+#endif
+    esp_task_wdt_add(NULL);
+    LOG_I("main", "Watchdog ativo (30s)");
+
     LOG_I("main", "Setup concluido");
 }
 
@@ -465,6 +482,8 @@ void loop() {
     static bool lastPortalMode = false;
     static bool lastCalendarConfigMode = false;
     static bool lastWebConfigMode = false;
+
+    esp_task_wdt_reset();
 
     M5.update();
     telnetLogUpdate();
@@ -624,6 +643,16 @@ void loop() {
                     }
                 }
             }
+        } else if (currentScreen == 0 && touchStartY < TIMER_ZONE_Y && longPress) {
+            // Long press na area do relogio → toggle modo cozinha ativa (wake-lock 1h)
+            if (powerIsCookingMode()) {
+                powerDisableCookingMode();
+                LOG_I("main", "Modo cozinha: desligado pelo usuario");
+            } else {
+                powerEnableCookingMode();
+                LOG_I("main", "Modo cozinha: ligado pelo usuario");
+            }
+            needsRedraw = true;
         } else if (currentScreen == 0 && touchStartY >= TIMER_ZONE_Y) {
             // Timer slot tabs (y=TIMER_ZONE_Y+5, 48×20px, gap=6)
             if (touchStartY < TIMER_ZONE_Y + 26) {
@@ -740,7 +769,8 @@ void loop() {
     bool wasDim = powerIsDim();
     powerUpdate(screenHomeIsAlarmActive() || screenHomeIsTimerActive() ||
                 screenHomeIsStopwatchRunning() || notifDrawerIsVisible() ||
-                wifiIsWebConfigMode() || wifiIsCalendarConfigMode());
+                wifiIsWebConfigMode() || wifiIsCalendarConfigMode() ||
+                powerIsCookingMode());
     if (wasDim != powerIsDim()) needsRedraw = true;
 
     // ── WiFi / clima ──
@@ -758,6 +788,7 @@ void loop() {
     if (!screenHomeIsTimerActive() && !screenHomeIsAlarmActive() &&
         !screenHomeIsStopwatchRunning() && !notifDrawerIsVisible() &&
         !wifiIsWebConfigMode() && !wifiIsCalendarConfigMode() &&
+        !powerIsCookingMode() &&
         powerShouldDeepSleep()) {
 
         LOG_I("main", "Deep sleep — salvando estado");

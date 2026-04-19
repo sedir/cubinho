@@ -43,6 +43,15 @@ void notifMqttApplyConfig(bool enabled, const char* host, int port,
                           const char* topic);
 void notifMqttPoll();                  // chamar no loop — gerencia reconexao
 bool notifMqttIsConnected();
+bool notifMqttPublish(const char* topic, const char* payload, bool retained = false);
+const char* notifMqttGetTopicBase();
+
+// ── Telemetria e health ──────────────────────────────────────────────────────
+// Informa o contador de boots (RTC_DATA_ATTR em main.cpp) para expor no /health.
+void notifSetBootCount(unsigned count);
+unsigned notifGetBootCount();
+// Marca o momento do ultimo fetch bem-sucedido (chamado por wifi_manager/weather).
+void notifMarkWeatherFetch();
 
 // ── Toast (banner breve no topo) ─────────────────────────────────────────────
 bool notifToastActive();

@@ -231,6 +231,7 @@ bool powerIsDim() {
 bool powerShouldDeepSleep() {
     if (_deepSleepTimeoutMs == 0) return false;  // 0 = nunca dormir
     if (powerIsOnExternalPower()) return false;  // cabo conectado → nunca dormir
+    if (powerIsCookingMode())     return false;  // modo cozinha ativa
     return (millis() - _lastTouchMs) > _deepSleepTimeoutMs;
 }
 
@@ -321,4 +322,38 @@ void powerSetAccelWake(bool enabled) {
 
 bool powerIsAccelWakeEnabled() {
     return _accelWakeEn;
+}
+
+// ── Modo cozinha ativa ──────────────────────────────────────────────────────
+static uint32_t _cookingModeUntilMs = 0;
+
+void powerEnableCookingMode(uint32_t durationMs) {
+    _cookingModeUntilMs = millis() + durationMs;
+    // Garante display aceso imediatamente
+    powerOnTouch();
+    LOG_I("power", "Modo cozinha ativa — %lu min", (unsigned long)(durationMs / 60000UL));
+}
+
+void powerDisableCookingMode() {
+    if (_cookingModeUntilMs == 0) return;
+    _cookingModeUntilMs = 0;
+    _lastTouchMs = millis();  // reinicia timer de dim para evitar dim imediato
+    LOG_I("power", "Modo cozinha desativado");
+}
+
+bool powerIsCookingMode() {
+    if (_cookingModeUntilMs == 0) return false;
+    if ((int32_t)(millis() - _cookingModeUntilMs) >= 0) {
+        // Expirou sozinho
+        _cookingModeUntilMs = 0;
+        _lastTouchMs = millis();
+        LOG_I("power", "Modo cozinha expirou");
+        return false;
+    }
+    return true;
+}
+
+uint32_t powerCookingModeRemainingMs() {
+    if (!powerIsCookingMode()) return 0;
+    return _cookingModeUntilMs - millis();
 }

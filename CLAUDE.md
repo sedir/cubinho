@@ -96,7 +96,9 @@ src/
 ├── telnet_log.h/.cpp       ← log via Telnet porta 23 + SD card
 ├── ota_manager.h/.cpp      ← ArduinoOTA (ativo com WiFi keep-alive)
 ├── events.h/.cpp           ← agenda de eventos lida do SD card (/events.json)
-├── notifications.h/.cpp    ← push notifications (HTTP + MQTT) + toast + gaveta
+├── notifications.h/.cpp    ← push notifications (HTTP + MQTT) + toast + gaveta + /health
+├── ha_discovery.h/.cpp     ← Home Assistant MQTT Discovery (entidades auto-registradas)
+├── i18n.h                  ← strings user-facing (hoje PT-BR, macro T() para futura troca)
 └── chime_wav.h             ← audio WAV do alarme (array PROGMEM)
 ```
 
@@ -383,7 +385,9 @@ POWER_DIM     →  deep sleep após deepSleepTimeoutMs (se timer não estiver at
 
 **Wake-lock por fonte externa**: `powerIsOnExternalPower()` retorna true quando `M5.Power.isCharging()` ou quando `batteryLevel >= 100` (carregador plugado com bateria cheia). Nesse caso `powerShouldDeepSleep()` retorna false — o aparelho fica sempre aceso enquanto conectado. Útil para manter notificações push recebendo em tempo real.
 
-Também bloqueiam dim/deep sleep: alarme ativo, timer ou cronômetro rodando, gaveta de notificações visível, página unificada de configuração aberta.
+**Modo cozinha ativa** (`powerEnableCookingMode(durationMs)`): long press na área do relógio (tela Home, `y < TIMER_ZONE_Y`) alterna um wake-lock de 1h por default. Enquanto ativo, `powerShouldDeepSleep()` retorna false e `powerUpdate()` trata como `keepAwake`. Um badge laranja "COZINHA Nmin" aparece acima do divisor mostrando o tempo restante. Segundo long press desliga antes da hora. Útil quando o usuário está cozinhando e quer o relógio + timer sempre visíveis sem tocar na tela.
+
+Também bloqueiam dim/deep sleep: alarme ativo, timer ou cronômetro rodando, gaveta de notificações visível, página unificada de configuração aberta, modo cozinha ativa.
 
 Em `POWER_DIM`: WiFi e atualizações de clima continuam. Display não redesenha (exceto relógio, 1×/min).
 
@@ -425,6 +429,8 @@ Log estruturado com timestamp, nível e tag:
 ## OTA (`ota_manager`)
 
 ArduinoOTA com hostname `OTA_HOSTNAME` ("cubinho"). Ativo apenas quando WiFi keep-alive habilitado. `otaUpdate()` chamado no loop principal.
+
+**OTA via web** (sem `platformio run --target upload`): o portal de configuração (porta 80) expõe um formulário "Atualizar Firmware" que faz upload de `.bin` direto para a flash via `POST /api/ota` usando a classe `Update`. Após sucesso, agenda restart em 800ms. Prático quando o PC não está acessível ao dispositivo pelo mDNS mas o navegador do celular está na mesma LAN.
 
 ---
 
@@ -476,8 +482,13 @@ Endpoints:
 - `POST /notify` — JSON `{title, body, icon}` ou form urlencoded (campos iguais)
 - `GET /list` — JSON com histórico
 - `POST /clear` — limpa tudo
+- `GET /health` — JSON com telemetria para monitoração (ver abaixo)
 
 Uso típico: iOS Shortcuts, `curl`, webhooks locais na LAN.
+
+#### `/health` (diagnóstico)
+
+Retorna JSON com: `uptime_s`, `boot_count`, `free_heap`, `min_free_heap`, `free_psram`, `ssid`, `ip`, `rssi`, `weather_age_s` (idade do último fetch de clima), `mqtt_connected`, `mqtt_last_msg_s`, `notif_count`, `notif_unread`. Consumível por Home Assistant, Uptime Kuma ou `curl | jq`.
 
 ### Cliente MQTT
 
@@ -486,6 +497,19 @@ Uso típico: iOS Shortcuts, `curl`, webhooks locais na LAN.
 - Texto puro (usa como corpo, título vira "MQTT")
 
 Vantagem sobre HTTP: atravessa NAT (outbound pro broker) — ideal pra Home Assistant, n8n, IFTTT via bridge. Configuração via página web (`/api/state` e `/api/save`).
+
+**Jitter no reconnect**: `_mqttBackoffMs` é multiplicado por `(1 ± 25%)` antes de cada tentativa, evitando thundering herd quando o broker volta e vários dispositivos reconectam juntos. Piso 1s, teto 90s.
+
+### Home Assistant MQTT Discovery (`ha_discovery`)
+
+Quando o MQTT conecta, publica retained configs em `homeassistant/<component>/cubinho_<mac6hex>/<obj>/config` para:
+- `sensor.cubinho_battery` — % de bateria
+- `sensor.cubinho_rssi` — dBm do WiFi
+- `sensor.cubinho_uptime` — segundos desde boot
+- `binary_sensor.cubinho_alarm` — true enquanto o alarme toca
+- `binary_sensor.cubinho_timer` — true enquanto algum timer roda
+
+Estados publicados em `cubinho_<mac6hex>/<obj>` a cada 30s (throttle). `node_id` derivado dos últimos 6 hex do MAC permite múltiplos Cubinhos no mesmo broker. Desativar via `haDiscoverySetEnabled(false)` limpa as entidades com payload vazio retained.
 
 ### Storage e UI
 
@@ -548,6 +572,14 @@ cfg.serial_baudrate = 115200;
 M5.begin(cfg);
 M5.Speaker.setVolume(85);   // volume de UI; alarme usa 160
 ```
+
+---
+
+## Robustez
+
+**Watchdog**: `esp_task_wdt` inicializado no final de `setup()` com timeout de 30s (API varia entre IDF 4/5 — guardada com `ESP_ARDUINO_VERSION_MAJOR`). O loop principal chama `esp_task_wdt_reset()` em cada iteração. Se algo travar por mais de 30s (HTTP pendurado, OTA corrupto, deadlock), o WDT dispara panic + reboot. Boot count persistido em `RTC_DATA_ATTR` incrementa a cada reboot.
+
+**Portal de setup com QR de pareamento**: `drawWifiPortalScreen()` renderiza um QR code no formato `WIFI:T:nopass;S:Cubinho-Setup;;` que celulares modernos escaneiam para conectar no AP aberto sem digitar senha. Depois basta abrir `192.168.4.1` (também exibido em texto) para escolher a rede de casa.
 
 ---
 

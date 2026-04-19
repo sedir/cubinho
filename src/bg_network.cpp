@@ -1,6 +1,7 @@
 #include "bg_network.h"
 #include "calendar_feed.h"
 #include "logger.h"
+#include "notifications.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
@@ -29,6 +30,7 @@ static void bgTaskFunc(void* param) {
         _bgWeatherOk = weatherFetch(result);
         if (_bgWeatherOk) {
             _bgWeatherOut = result;
+            notifMarkWeatherFetch();  // telemetria /health
         } else {
             LOG_W("bg_net", "Weather fetch falhou — mantendo dados anteriores");
             _bgWeatherOut = _bgWeatherIn;

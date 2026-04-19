@@ -148,6 +148,9 @@ Cada item abaixo representa uma decisão consciente onde UX ganhou sobre eficiê
 
 ### UX ganhou (energia sacrificada intencionalmente)
 
+**Modo cozinha ativa (wake-lock 1h)**
+Long press na área do relógio segura o display em `POWER_ACTIVE` por 1h, bloqueando dim e deep sleep. Custo: ~60 min a 138 mA = ~138 mAh (≈15% da bateria por ativação). Mantido porque o cenário de uso (cozinhar com as mãos ocupadas/sujas) exige visibilidade contínua sem tocar na tela. Usuário pode cancelar manualmente com novo long press; expira sozinho em 1h. Badge laranja "COZINHA Nmin" torna o custo visível.
+
 **Animação de transição entre telas**
 190 ms a ~60 fps, CPU a 240 MHz (WiFi lock + rendering). Custo: ~0.5 mJ por transição. Mantido porque é a principal metáfora de navegação e o tempo de uso é curto.
 

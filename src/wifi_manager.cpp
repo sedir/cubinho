@@ -6,10 +6,12 @@
 #include "runtime_config.h"
 #include "screen_home.h"
 #include "bg_network.h"
+#include "notifications.h"
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <Update.h>
 #include <time.h>
 
 // ── Estado async ─────────────────────────────────────────────────────────────
@@ -492,6 +494,8 @@ bool wifiConnectAndFetch(WeatherData &out)
     if (!weatherOk)
     {
         LOG_W("wifi", "Clima indisponivel — mantendo ultimo dado valido");
+    } else {
+        notifMarkWeatherFetch();  // telemetria /health
     }
     if (calendarHasFeedConfigured())
     {
@@ -941,6 +945,19 @@ footer a{color:var(--accent)}
 <div class="save-bar"><button type="button" class="btn" id="saveBtn">Salvar</button></div>
 
 <div class="card">
+  <h2>Atualizacao de firmware</h2>
+  <p class="desc">Envie o binario compilado (<code>.pio/build/m5stack-cores3/firmware.bin</code>). O aparelho reinicia automaticamente ao final.</p>
+  <form id="otaForm" enctype="multipart/form-data">
+    <input type="file" id="otaFile" name="firmware" accept=".bin" style="color:var(--muted);padding:10px 0;width:100%">
+    <div id="otaProgress" class="hidden" style="margin-top:12px">
+      <div style="background:#2a3254;border-radius:6px;height:10px;overflow:hidden"><div id="otaBar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div></div>
+      <p id="otaStatus" class="desc" style="margin-top:8px">Enviando...</p>
+    </div>
+    <button type="submit" class="btn" id="otaBtn" style="margin-top:14px">Enviar firmware</button>
+  </form>
+</div>
+
+<div class="card">
   <h2>Manutencao</h2>
   <div class="grid2">
     <button type="button" class="btn ghost" id="restartBtn">Reiniciar</button>
@@ -1077,6 +1094,37 @@ async function doAction(path, confirmMsg){
 $('#saveBtn').addEventListener('click', save);
 $('#restartBtn').addEventListener('click', ()=>doAction('/api/restart', 'Reiniciar o Cubinho?'));
 $('#factoryBtn').addEventListener('click', ()=>doAction('/api/factory', 'Apagar todas as configuracoes e credenciais WiFi?'));
+
+$('#otaForm').addEventListener('submit', function(e){
+  e.preventDefault();
+  const f = $('#otaFile').files[0];
+  if (!f) { toast('Escolha o arquivo .bin', true); return; }
+  if (!confirm('Enviar firmware e reiniciar?')) return;
+  const prog = $('#otaProgress'); const bar = $('#otaBar'); const st = $('#otaStatus');
+  const btn = $('#otaBtn');
+  prog.classList.remove('hidden'); btn.disabled = true; btn.textContent = 'Enviando...';
+  const fd = new FormData(); fd.append('firmware', f, f.name);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/ota', true);
+  xhr.upload.onprogress = function(ev){
+    if (!ev.lengthComputable) return;
+    const p = Math.round(ev.loaded * 100 / ev.total);
+    bar.style.width = p + '%'; st.textContent = 'Enviando... ' + p + '%';
+  };
+  xhr.onload = function(){
+    if (xhr.status === 200) {
+      st.textContent = 'Sucesso! Reiniciando...'; bar.style.width = '100%'; toast('Firmware atualizado');
+    } else {
+      st.textContent = 'Falha: ' + xhr.responseText; toast('Falha no upload', true);
+      btn.disabled = false; btn.textContent = 'Enviar firmware';
+    }
+  };
+  xhr.onerror = function(){
+    st.textContent = 'Erro de rede'; toast('Falha no upload', true);
+    btn.disabled = false; btn.textContent = 'Enviar firmware';
+  };
+  xhr.send(fd);
+});
 
 load();
 </script>
@@ -1247,6 +1295,47 @@ static void startWebConfigServer()
         _webConfigRestartPending = true;
         _webConfigRestartAtMs = millis() + 1200;
     });
+    // OTA via navegador — upload multipart de firmware.bin.
+    // Dois callbacks: o "response" roda apos o upload completo; o "upload"
+    // recebe os chunks e alimenta o Update.
+    _webServer->on("/api/ota", HTTP_POST,
+        []() {
+            // Response callback
+            bool ok = !Update.hasError();
+            _webServer->sendHeader("Connection", "close");
+            _webServer->send(ok ? 200 : 500, "application/json",
+                             ok ? "{\"ok\":true}" : "{\"ok\":false}");
+            if (ok) {
+                LOG_I("ota-web", "Upload concluido — reiniciando em 800ms");
+                _webConfigRestartPending = true;
+                _webConfigRestartAtMs = millis() + 800;
+            }
+        },
+        []() {
+            // Upload callback (chamado por chunk)
+            HTTPUpload& up = _webServer->upload();
+            if (up.status == UPLOAD_FILE_START) {
+                LOG_I("ota-web", "Upload iniciado: %s", up.filename.c_str());
+                // UPDATE_SIZE_UNKNOWN = aceita qualquer tamanho
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                    LOG_E("ota-web", "Update.begin falhou");
+                }
+            } else if (up.status == UPLOAD_FILE_WRITE) {
+                if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+                    LOG_E("ota-web", "Update.write falhou");
+                }
+            } else if (up.status == UPLOAD_FILE_END) {
+                if (Update.end(true)) {
+                    LOG_I("ota-web", "Upload OK: %u bytes", up.totalSize);
+                } else {
+                    LOG_E("ota-web", "Update.end falhou (err=%d)", Update.getError());
+                }
+            } else if (up.status == UPLOAD_FILE_ABORTED) {
+                Update.end();
+                LOG_W("ota-web", "Upload abortado");
+            }
+        }
+    );
     _webServer->onNotFound([]() {
         _webServer->sendHeader("Location", "/");
         _webServer->send(302, "text/plain", "");

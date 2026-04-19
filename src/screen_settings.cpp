@@ -550,32 +550,56 @@ bool screenSettingsIsConfirmOpen() {
 void drawWifiPortalScreen(lgfx::LovyanGFX& d) {
     d.fillScreen(COLOR_BACKGROUND);
 
+    // Titulo
     d.setFont(&fonts::FreeSansBold18pt7b);
     d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
     d.setTextDatum(MC_DATUM);
-    d.drawString("Configure o WiFi", d.width() / 2, 40);
+    d.drawString("Configure o WiFi", d.width() / 2, 18);
 
+    // QR code de pareamento com o AP aberto. Formato padrao WiFi QR:
+    //   WIFI:T:nopass;S:<ssid>;;
+    // iOS/Android lem automaticamente e oferecem conectar sem digitar.
+    char wifiQr[64];
+    snprintf(wifiQr, sizeof(wifiQr), "WIFI:T:nopass;S:%s;;", WIFI_PORTAL_AP_NAME);
+
+    const int qrSize = 130;
+    const int qrX    = 16;
+    const int qrY    = 52;
+    d.fillRect(qrX - 6, qrY - 6, qrSize + 12, qrSize + 12, TFT_WHITE);
+    d.qrcode(wifiQr, qrX, qrY, qrSize, 4);
+
+    // Painel direito — instrucoes passo a passo
+    const int px = qrX + qrSize + 20;
     d.setFont(&fonts::FreeSans9pt7b);
     d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-    d.drawString("Pelo celular, conecte em:", d.width() / 2, 75);
-
-    d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
-    d.drawString(WIFI_PORTAL_AP_NAME, d.width() / 2, 98);
-
-    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
-    d.drawString("e acesse no navegador:", d.width() / 2, 125);
-
-    d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
-    d.drawString("192.168.4.1", d.width() / 2, 148);
-
-    // Botão de QR
-    d.fillRoundRect(d.width() / 2 - 110, 175, 220, 36, 8, 0x2945); // Background similar to buttons
-    d.setTextColor(COLOR_TEXT_PRIMARY, 0x2945);
-    d.drawString("TOQUE PARA LER QR", d.width() / 2, 193);
+    d.setTextDatum(TL_DATUM);
+    d.drawString("1. Leia o QR", px, 50);
 
     d.setFont(&fonts::Font0);
     d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
-    d.drawString("Apos salvar, o dispositivo reiniciara.", d.width() / 2, 226);
+    d.drawString("(rede aberta)", px, 68);
+
+    d.setFont(&fonts::FreeSans9pt7b);
+    d.setTextColor(COLOR_TEXT_DIM, COLOR_BACKGROUND);
+    d.drawString("2. Abra:", px, 92);
+    d.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
+    d.drawString("192.168.4.1", px, 112);
+
+    d.setFont(&fonts::Font0);
+    d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+    d.drawString("rede:", px, 134);
+    d.setTextColor(COLOR_TEXT_PRIMARY, COLOR_BACKGROUND);
+    d.drawString(WIFI_PORTAL_AP_NAME, px, 148);
+
+    // Botao secundario — scan QR do roteador (se usuario tiver QR do WiFi da casa)
+    d.fillRoundRect(16, 196, 288, 26, 6, 0x2945);
+    d.setFont(&fonts::Font0);
+    d.setTextColor(COLOR_TEXT_PRIMARY, 0x2945);
+    d.setTextDatum(MC_DATUM);
+    d.drawString("TOQUE PARA LER QR DO ROTEADOR", d.width() / 2, 209);
+
+    d.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+    d.drawString("Apos salvar, o dispositivo reinicia.", d.width() / 2, 231);
 }
 
 void drawWebConfigScreen(lgfx::LovyanGFX& d) {

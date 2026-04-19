@@ -88,6 +88,9 @@ src/
 ├── ota_manager.h/.cpp     — atualização OTA sem fio (ArduinoOTA)
 ├── events.h/.cpp          — agenda de eventos do SD card (/events.json)
 ├── calendar_feed.h/.cpp   — leitor de feed iCal/ICS para eventos do dia
+├── notifications.h/.cpp   — push via HTTP/MQTT, toast, gaveta e endpoint /health
+├── ha_discovery.h/.cpp    — Home Assistant MQTT Discovery (auto-registro)
+├── i18n.h                 — strings user-facing (hoje PT-BR, pronto para i18n)
 └── chime_wav.h            — audio WAV do alarme (array PROGMEM)
 ```
 
@@ -116,11 +119,24 @@ src/
 - Wake por proximidade (LTR553 PS), toque ou acelerômetro
 - Deep sleep com wake por toque (EXT0, GPIO21) ou timer (atualização do clima)
 - Orientação automática via acelerômetro (rotações landscape 1 e 3)
+- **Modo cozinha ativa**: long press na área do relógio mantém o display aceso por 1h sem tocar (ideal enquanto cozinha)
 
 ### Conectividade
-- Portal cativo WiFi: após 3 falhas consecutivas, abre AP "Cubinho-Setup" para reconfiguraçção
+- Portal cativo WiFi: após 3 falhas consecutivas, abre AP "Cubinho-Setup" para reconfiguração
+- QR code de pareamento no portal — celulares modernos conectam sem digitar senha
 - OTA via ArduinoOTA (hostname "cubinho") quando keep-alive ativo
+- **OTA via navegador**: formulário no portal de configuração aceita upload de `.bin` pela LAN
 - Log via Telnet (porta 23) e SD card quando disponível
+
+### Integração
+- **Notificações push** via HTTP (`POST /notify` na porta 8080) ou MQTT
+- **Home Assistant MQTT Discovery**: entidades auto-registradas (bateria, RSSI, uptime, alarme, timer)
+- **Endpoint `/health`**: JSON com telemetria (uptime, heap, RSSI, idade do clima, MQTT) para monitoração
+
+### Robustez
+- Task watchdog (30s) — reboota se o loop travar
+- Jitter exponencial no reconnect MQTT para evitar thundering herd
+- Boot count persistido em `RTC_DATA_ATTR` (visível na tela System e no `/health`)
 
 ---
 
