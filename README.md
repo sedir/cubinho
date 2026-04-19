@@ -90,6 +90,10 @@ src/
 ├── calendar_feed.h/.cpp   — leitor de feed iCal/ICS para eventos do dia
 ├── notifications.h/.cpp   — push via HTTP/MQTT, toast, gaveta e endpoint /health
 ├── ha_discovery.h/.cpp    — Home Assistant MQTT Discovery (auto-registro)
+├── shopping_list.h/.cpp   — lista de compras compartilhada (NVS + HTTP + MQTT)
+├── family_note.h/.cpp     — recado curto da família exibido na Home
+├── recipes.h/.cpp         — presets de nome+duração para timers ("ovo 6min")
+├── door_sensor.h/.cpp     — detecção de abertura da porta via IMU + contagem diária
 ├── i18n.h                 — strings user-facing (hoje PT-BR, pronto para i18n)
 └── chime_wav.h            — audio WAV do alarme (array PROGMEM)
 ```
@@ -102,6 +106,8 @@ src/
 - 3 timers simultâneos com tabs para trocar o slot focado
 - Presets rápidos: 1, 3, 5, 10, 15, 20, 30 minutos
 - Alarme sonoro com WAV e display piscante ao atingir zero
+- **Knock-to-silence**: bate na geladeira para silenciar o alarme (detectado pelo IMU)
+- **Receitas configuráveis** (10 presets de nome+duração, editáveis em `GET/POST /recipes`) — renomeia o slot e ajusta o tempo automaticamente (ex: "Ovo 6min", "Bolo 35min")
 - Estado preservado através do deep sleep via `RTC_DATA_ATTR`
 
 ### Clima
@@ -131,7 +137,10 @@ src/
 ### Integração
 - **Notificações push** via HTTP (`POST /notify` na porta 8080) ou MQTT
 - **Home Assistant MQTT Discovery**: entidades auto-registradas (bateria, RSSI, uptime, alarme, timer)
-- **Endpoint `/health`**: JSON com telemetria (uptime, heap, RSSI, idade do clima, MQTT) para monitoração
+- **Endpoint `/health`**: JSON com telemetria (uptime, heap, RSSI, idade do clima, MQTT, porta) para monitoração
+- **Lista de compras compartilhada**: CRUD via página HTML (`GET /shopping`), API JSON (`GET/POST /shopping.json`) e MQTT sub-tópico `/shopping`. Contador de itens pendentes aparece na Home.
+- **Notas/recados pra família**: texto curto publicado via `POST /note` ou MQTT sub-tópico `/note`. Exibido em amarelo no cabeçalho da Home (prioridade sobre evento do calendário).
+- **Detecção de abertura da porta**: o IMU detecta o swing da porta via desvio do vetor gravitacional. Conta aberturas por dia (reset à meia-noite) e alerta com LEDs vermelhos piscantes + overlay na tela se aberta >60s. Telemetria em `/health` (`door_open`, `door_open_s`, `door_today`, `door_yesterday`).
 
 ### Robustez
 - Task watchdog (30s) — reboota se o loop travar

@@ -7,7 +7,8 @@ void ledInit();
 //   isDim        — display em modo dim (LEDs apagados)
 //   alarmActive  — timer DONE (pisca vermelho junto com o display)
 //   timerRunning — timer RUNNING (breathing verde)
-void ledUpdate(bool isDim, bool alarmActive, bool timerRunning);
+//   doorAlert    — porta aberta ha mais de 60 s (pulso vermelho mais lento)
+void ledUpdate(bool isDim, bool alarmActive, bool timerRunning, bool doorAlert = false);
 
 // Apaga todos os LEDs imediatamente (usar antes do deep sleep).
 void ledOff();

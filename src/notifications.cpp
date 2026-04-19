@@ -4,6 +4,10 @@
 #include "wifi_manager.h"
 #include "power_manager.h"
 #include "ha_discovery.h"
+#include "shopping_list.h"
+#include "family_note.h"
+#include "recipes.h"
+#include "door_sensor.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WiFiClient.h>
@@ -249,7 +253,7 @@ static void handleHealth() {
         mqttLastMsgSec = (long)((nowMs - _lastMqttMsgMs) / 1000UL);
     }
 
-    char json[512];
+    char json[640];
     snprintf(json, sizeof(json),
         "{"
         "\"ok\":true,"
@@ -265,7 +269,11 @@ static void handleHealth() {
         "\"mqtt_connected\":%s,"
         "\"mqtt_last_msg_s\":%ld,"
         "\"notif_count\":%d,"
-        "\"notif_unread\":%d"
+        "\"notif_unread\":%d,"
+        "\"door_open\":%s,"
+        "\"door_open_s\":%lu,"
+        "\"door_today\":%d,"
+        "\"door_yesterday\":%d"
         "}",
         (unsigned long)uptimeSec,
         _bootCount,
@@ -279,10 +287,123 @@ static void handleHealth() {
         notifMqttIsConnected() ? "true" : "false",
         mqttLastMsgSec,
         _count,
-        notifGetUnreadCount());
+        notifGetUnreadCount(),
+        doorSensorIsOpen() ? "true" : "false",
+        (unsigned long)(doorSensorOpenDurationMs() / 1000UL),
+        doorSensorTodayCount(),
+        doorSensorYesterdayCount());
 
     _server->sendHeader("Cache-Control", "no-store");
     _server->send(200, "application/json", json);
+}
+
+// ── Shopping list endpoints ─────────────────────────────────────────────────
+static void handleShoppingGet() {
+    char buf[1536];
+    size_t n = shoppingToJson(buf, sizeof(buf));
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(200, "application/json", (n > 0) ? buf : "{\"items\":[]}");
+}
+
+static void handleShoppingPost() {
+    String raw = _server->hasArg("plain") ? _server->arg("plain") : String("");
+    // Form urlencoded: action=add&name=... / action=toggle&index=...
+    if (raw.length() == 0 || raw[0] != '{') {
+        JsonDocument doc;
+        doc["action"] = _server->arg("action");
+        String name   = _server->arg("name");
+        String idx    = _server->arg("index");
+        if (name.length()) doc["name"]  = name;
+        if (idx.length())  doc["index"] = idx.toInt();
+        raw.clear();
+        serializeJson(doc, raw);
+    }
+    bool ok = shoppingApplyJson(raw.c_str());
+    char buf[192];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":%s,\"count\":%d,\"pending\":%d}",
+             ok ? "true" : "false",
+             shoppingCount(), shoppingPendingCount());
+    _server->send(200, "application/json", buf);
+}
+
+static void handleShoppingUI() {
+    String html;
+    html.reserve(4096);
+    html += F("<!DOCTYPE html><html lang=\"pt-br\"><head><meta charset=\"utf-8\">");
+    html += F("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
+    html += F("<title>Lista de Compras</title><style>");
+    html += F("body{font-family:system-ui;max-width:480px;margin:0 auto;padding:20px;background:#111827;color:#e5e7eb}");
+    html += F("h1{color:#f59e0b}input,button{font-size:16px;padding:10px;border-radius:8px;border:1px solid #334155;background:#1f2937;color:#e5e7eb}");
+    html += F("form{display:flex;gap:8px;margin-bottom:16px}input{flex:1}button{background:#f59e0b;color:#111;border:none;font-weight:700}");
+    html += F("ul{list-style:none;padding:0}li{display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid #334155}");
+    html += F(".done{text-decoration:line-through;opacity:.5}.del{background:#ef4444;color:#fff;padding:6px 10px;font-size:14px}");
+    html += F(".foot{margin-top:20px;display:flex;gap:8px}</style></head><body>");
+    html += F("<h1>Lista de Compras</h1>");
+    html += F("<form id=f><input id=n placeholder=\"ex: leite, pao...\" maxlength=31 required autofocus>");
+    html += F("<button>Adicionar</button></form><ul id=l></ul>");
+    html += F("<div class=foot><button onclick=clr(false)>Limpar marcados</button>");
+    html += F("<button class=del onclick=clr(true)>Esvaziar</button></div>");
+    html += F("<script>");
+    html += F("async function load(){let r=await fetch('/shopping');let j=await r.json();let ul=document.getElementById('l');ul.innerHTML='';");
+    html += F("(j.items||[]).forEach((it,i)=>{let li=document.createElement('li');");
+    html += F("li.innerHTML='<input type=checkbox '+(it.done?'checked':'')+' onchange=t('+i+')> <span class=\"'+(it.done?'done':'')+'\" style=flex:1>'+it.name+'</span>'+");
+    html += F("'<button class=del onclick=r('+i+')>x</button>';ul.appendChild(li)});}");
+    html += F("async function p(a,b){await fetch('/shopping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a,...b})});load();}");
+    html += F("async function t(i){p('toggle',{index:i})}async function r(i){p('remove',{index:i})}");
+    html += F("async function clr(all){if(!confirm(all?'Esvaziar a lista toda?':'Remover marcados?'))return;p(all?'clear':'clear_done',{})}");
+    html += F("document.getElementById('f').onsubmit=e=>{e.preventDefault();let n=document.getElementById('n').value.trim();if(!n)return;p('add',{name:n});document.getElementById('n').value=''};");
+    html += F("load();setInterval(load,5000);</script></body></html>");
+    _server->send(200, "text/html", html);
+}
+
+// ── Family note endpoints ───────────────────────────────────────────────────
+static void handleNoteGet() {
+    char body[NOTE_TEXT_LEN + 64];
+    char text[NOTE_TEXT_LEN];
+    familyNoteGet(text, sizeof(text));
+    snprintf(body, sizeof(body),
+             "{\"text\":\"%s\",\"ts\":%lu}",
+             text, (unsigned long)familyNoteTimestamp());
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(200, "application/json", body);
+}
+
+static void handleNotePost() {
+    String text;
+    if (_server->hasArg("plain")) {
+        String raw = _server->arg("plain");
+        if (raw.length() > 0 && raw[0] == '{') {
+            JsonDocument doc;
+            if (!deserializeJson(doc, raw)) {
+                text = String((const char*)(doc["text"] | ""));
+            }
+        } else {
+            text = raw;
+        }
+    }
+    if (text.length() == 0) text = _server->arg("text");
+    familyNoteSet(text.c_str());
+    _server->send(200, "application/json", "{\"ok\":true}");
+}
+
+// ── Recipes endpoints ───────────────────────────────────────────────────────
+static void handleRecipesGet() {
+    char buf[768];
+    size_t n = recipesToJson(buf, sizeof(buf));
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(200, "application/json", (n > 0) ? buf : "[]");
+}
+
+static void handleRecipesPost() {
+    String raw = _server->hasArg("plain") ? _server->arg("plain") : String("");
+    if (raw.length() == 0) {
+        _server->send(400, "application/json", "{\"ok\":false,\"error\":\"empty\"}");
+        return;
+    }
+    bool ok = recipesApplyJson(raw.c_str());
+    _server->send(ok ? 200 : 400, "application/json",
+                  ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"invalid\"}");
 }
 
 static void handleNotFound() {
@@ -293,11 +414,18 @@ static void handleNotFound() {
 static void startServer() {
     if (_server) return;
     _server = new WebServer(NOTIF_HTTP_PORT);
-    _server->on("/",       HTTP_GET,  handleRoot);
-    _server->on("/notify", HTTP_POST, handleNotify);
-    _server->on("/list",   HTTP_GET,  handleList);
-    _server->on("/clear",  HTTP_POST, handleClear);
-    _server->on("/health", HTTP_GET,  handleHealth);
+    _server->on("/",          HTTP_GET,  handleRoot);
+    _server->on("/notify",    HTTP_POST, handleNotify);
+    _server->on("/list",      HTTP_GET,  handleList);
+    _server->on("/clear",     HTTP_POST, handleClear);
+    _server->on("/health",    HTTP_GET,  handleHealth);
+    _server->on("/shopping",  HTTP_GET,  handleShoppingUI);
+    _server->on("/shopping",  HTTP_POST, handleShoppingPost);
+    _server->on("/shopping.json", HTTP_GET,  handleShoppingGet);
+    _server->on("/note",      HTTP_GET,  handleNoteGet);
+    _server->on("/note",      HTTP_POST, handleNotePost);
+    _server->on("/recipes",   HTTP_GET,  handleRecipesGet);
+    _server->on("/recipes",   HTTP_POST, handleRecipesPost);
     _server->onNotFound(handleNotFound);
     _server->begin();
     LOG_I("notif", "Servidor push ativo — http://%s:%d/",
@@ -640,13 +768,41 @@ static uint32_t _mqttLastAttemptMs = 0;
 static uint32_t _mqttBackoffMs     = 2000;
 
 static void mqttOnMessage(char* topic, byte* payload, unsigned int len) {
-    (void)topic;
     _lastMqttMsgMs = millis();  // telemetria /health
     // Aceita JSON {"title":..,"body":..,"icon":..} ou texto simples.
-    char buf[256];
+    char buf[1024];
     size_t n = (len < sizeof(buf) - 1) ? len : sizeof(buf) - 1;
     memcpy(buf, payload, n);
     buf[n] = '\0';
+
+    // Roteia por sub-topico (<base>/shopping, <base>/note). A subscribe do base
+    // cobre o proprio tópico e os filhos quando o usuario usa wildcard; aqui
+    // comparamos o sufixo manualmente pra aceitar ambos os formatos.
+    const char* tp = topic ? topic : "";
+    const char* suffix = strrchr(tp, '/');
+    if (suffix) suffix++;
+    else        suffix = tp;
+
+    if (suffix && strcmp(suffix, "shopping") == 0) {
+        if (shoppingApplyJson(buf)) {
+            LOG_I("notif", "MQTT shopping — aplicado");
+        }
+        return;
+    }
+    if (suffix && strcmp(suffix, "note") == 0) {
+        // Aceita JSON {"text":"..."} ou texto puro
+        const char* p = buf;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (*p == '{') {
+            JsonDocument doc;
+            if (deserializeJson(doc, p) == DeserializationError::Ok) {
+                familyNoteSet(doc["text"] | "");
+                return;
+            }
+        }
+        familyNoteSet(buf);
+        return;
+    }
 
     const char* p = buf;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -728,8 +884,15 @@ void notifMqttPoll() {
 
     if (ok) {
         _mqttClient.subscribe(_mqttTopic);
+        // Sub-topicos: <base>/shopping e <base>/note. Evita forcar o usuario a
+        // configurar tudo em um topico unico — cada feature tem seu canal.
+        char sub[96];
+        snprintf(sub, sizeof(sub), "%s/shopping", _mqttTopic);
+        _mqttClient.subscribe(sub);
+        snprintf(sub, sizeof(sub), "%s/note", _mqttTopic);
+        _mqttClient.subscribe(sub);
         _mqttBackoffMs = 2000;
-        LOG_I("notif", "MQTT conectado — sub %s", _mqttTopic);
+        LOG_I("notif", "MQTT conectado — sub %s (+ /shopping, /note)", _mqttTopic);
         // HA discovery: publica configs das entidades assim que conectar.
         haDiscoveryPublishConfigs();
     } else {

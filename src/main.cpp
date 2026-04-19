@@ -25,6 +25,10 @@
 #include "qr_scanner.h"
 #include "voice_cmd.h"
 #include "notifications.h"
+#include "shopping_list.h"
+#include "family_note.h"
+#include "door_sensor.h"
+#include "recipes.h"
 
 // ── LTR553 — sensor de proximidade embutido ──────────────────────────────────
 #define LTR553_ADDR         0x23
@@ -381,6 +385,10 @@ void setup() {
 
     SPLASH("Notificacoes...");
     notifInit();
+    shoppingInit();
+    familyNoteInit();
+    recipesInit();
+    doorSensorInit();
 
     SPLASH("Configuracoes...");
     runtimeConfigLoad(g_runtimeCfg);
@@ -492,6 +500,18 @@ void loop() {
     notifServerPoll();    // HTTP push server (atrelado ao WiFi keep-alive)
     notifMqttPoll();      // cliente MQTT (idem)
     notifDrawerUpdate();  // anima gaveta de notificacoes
+    doorSensorUpdate();   // detecta abertura/fechamento via acelerometro
+
+    // Push notification one-shot quando a porta fica aberta > 60 s
+    {
+        static bool wasLongOpen = false;
+        bool longOpen = doorSensorIsLongOpen();
+        if (longOpen && !wasLongOpen) {
+            notifPush("Porta da geladeira",
+                      "Aberta ha mais de 1 minuto", NOTIF_ICON_WARN);
+        }
+        wasLongOpen = longOpen;
+    }
 
     bool portalMode = wifiIsPortalMode();
     bool calendarConfigMode = wifiIsCalendarConfigMode();
@@ -885,6 +905,32 @@ void loop() {
         }
         if (((now / 400) % 2 == 0) != ((lastDrawMs / 400) % 2 == 0))
             needsRedraw = true;
+
+        // Knock-to-silence: amostra o acelerometro a 100ms e silencia quando
+        // detecta uma batida forte (delta de magnitude > 0.8g). Ideal quando o
+        // usuario esta com as maos ocupadas/sujas na cozinha.
+        static uint32_t lastKnockMs  = 0;
+        static float    lastKnockMag = -1.0f;
+        static uint32_t alarmStartMs = 0;
+        if (!alarmWasActive) { alarmStartMs = now; lastKnockMag = -1.0f; }
+        if ((now - lastKnockMs) >= 100 && (now - alarmStartMs) > 500) {
+            lastKnockMs = now;
+            float kx, ky, kz;
+            if (M5.Imu.getAccel(&kx, &ky, &kz)) {
+                float kmag = sqrtf(kx*kx + ky*ky + kz*kz);
+                if (lastKnockMag >= 0.0f) {
+                    float kdelta = fabsf(kmag - lastKnockMag);
+                    if (kdelta > 0.8f) {
+                        LOG_I("imu", "Knock detectado (delta=%.2f) — silencia", kdelta);
+                        screenHomeDismissAlarm();
+                        M5.Speaker.stop();
+                        M5.Speaker.setVolume(85);
+                        needsRedraw = true;
+                    }
+                }
+                lastKnockMag = kmag;
+            }
+        }
     } else if (alarmWasActive) {
         M5.Speaker.stop();
         M5.Speaker.setVolume(85);  // restaura volume de UI
@@ -907,7 +953,8 @@ void loop() {
     if (!powerIsDim()) lastDimMinute = 255;
 
     // ── LEDs ──
-    ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning());
+    ledUpdate(powerIsDim(), alarmActive, screenHomeIsTimerRunning(),
+              doorSensorIsLongOpen());
 
     // ── Scroll suave das configurações (lerp ease-out) ──
     bool scrollAnimating = false;

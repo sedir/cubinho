@@ -5,17 +5,18 @@
 #include "logger.h"
 #include "power_manager.h"
 #include "i18n.h"
+#include "shopping_list.h"
+#include "family_note.h"
+#include "door_sensor.h"
+#include "recipes.h"
 #include <time.h>
 #include <math.h>
 
 static const char* DIAS[]  = { "dom", "seg", "ter", "qua", "qui", "sex", "sab" };
 static const char* MESES[] = { "jan", "fev", "mar", "abr", "mai", "jun",
                                 "jul", "ago", "set", "out", "nov", "dez" };
-static const char* TIMER_LABEL_PRESETS[] = {
-    "Forno", "Massa", "Cafe", "Cha", "Sopa",
-    "Arroz", "Bolo", "Ovos", "Frango", "Livre"
-};
-static const int TIMER_LABEL_PRESET_COUNT = (int)(sizeof(TIMER_LABEL_PRESETS) / sizeof(TIMER_LABEL_PRESETS[0]));
+// Os presets (nome + minutos) agora vivem em `recipes.cpp` e sao editaveis
+// via portal web. As APIs abaixo delegam para aquele modulo.
 
 // ── Estado do timer — múltiplos slots (item #16) ─────────────────────────────
 enum TimerState { TIMER_SETTING, TIMER_RUNNING, TIMER_PAUSED, TIMER_DONE };
@@ -50,12 +51,13 @@ static uint32_t getRemaining(int slot) {
 }
 
 int screenHomeGetTimerLabelPresetCount() {
-    return TIMER_LABEL_PRESET_COUNT;
+    return recipesCount();
 }
 
 const char* screenHomeGetTimerLabelPresetName(int presetIdx) {
-    if (presetIdx < 0 || presetIdx >= TIMER_LABEL_PRESET_COUNT) return TIMER_LABEL_PRESETS[0];
-    return TIMER_LABEL_PRESETS[presetIdx];
+    const Recipe* r = recipesGetAt(presetIdx);
+    if (!r) r = recipesGetAt(0);
+    return r ? r->name : "";
 }
 
 int screenHomeGetTimerLabelPreset(int slot) {
@@ -71,8 +73,18 @@ const char* screenHomeGetTimerLabel(int slot) {
 
 void screenHomeSetTimerLabelPreset(int slot, int presetIdx) {
     if (slot < 0 || slot >= MAX_TIMERS) return;
-    if (presetIdx < 0 || presetIdx >= TIMER_LABEL_PRESET_COUNT) presetIdx = slot % TIMER_LABEL_PRESET_COUNT;
+    int cnt = recipesCount();
+    if (presetIdx < 0 || presetIdx >= cnt) presetIdx = slot % cnt;
     timerLabelPreset[slot] = presetIdx;
+    // Aplica a duracao da receita se o slot estiver no estado SETTING (ainda
+    // nao iniciado). Se o usuario ja estava rodando/pausado, nao interfere.
+    if (timerStates[slot] == TIMER_SETTING && !timerHasCustomName[slot]) {
+        const Recipe* r = recipesGetAt(presetIdx);
+        if (r) {
+            timerMinutes[slot]  = r->minutes;
+            timerRemainMs[slot] = (uint32_t)r->minutes * 60000UL;
+        }
+    }
 }
 
 int  screenHomeGetTotalSlots()      { return MAX_TIMERS + 1; }
@@ -183,6 +195,17 @@ int screenHomeAlarmSlot() {
     for (int i = 0; i < MAX_TIMERS; i++)
         if (timerStates[i] == TIMER_DONE) return i;
     return -1;
+}
+
+// Silencia todos os alarmes em DONE (chamado por tap + knock-to-silence).
+// Volta cada slot pra SETTING com os minutos originais.
+void screenHomeDismissAlarm() {
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (timerStates[i] == TIMER_DONE) {
+            timerStates[i]   = TIMER_SETTING;
+            timerRemainMs[i] = (uint32_t)timerMinutes[i] * 60000UL;
+        }
+    }
 }
 
 bool screenHomeInit() {
@@ -637,15 +660,34 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
     }
     drawBatteryIndicator(display);
 
-    // Evento próximo (item #24)
-    if (nextEventText[0]) {
-        char headerEvent[48];
-        strlcpy(headerEvent, nextEventText, sizeof(headerEvent));
+    // Recado da familia tem prioridade sobre o proximo evento (mais efemero).
+    // Se nao ha recado, cai pro evento do calendario.
+    char   header2[64] = "";
+    bool   header2IsNote = false;
+    if (familyNoteHas()) {
+        familyNoteGet(header2, sizeof(header2));
+        header2IsNote = true;
+    } else if (nextEventText[0]) {
+        strlcpy(header2, nextEventText, sizeof(header2));
+    }
+    if (header2[0]) {
         display.setFont(&fonts::Font0);
-        display.setTextColor(COLOR_TEXT_ACCENT, COLOR_BACKGROUND);
+        display.setTextColor(header2IsNote ? 0xFFE0 /*amarelo*/ : COLOR_TEXT_ACCENT,
+                             COLOR_BACKGROUND);
         display.setTextDatum(TL_DATUM);
-        appendEllipsisToHeader(display, headerEvent, sizeof(headerEvent), display.width() - 12);
-        display.drawString(headerEvent, 6, 25);
+        appendEllipsisToHeader(display, header2, sizeof(header2), display.width() - 12);
+        display.drawString(header2, 6, 25);
+    }
+
+    // Badge de lista de compras (canto inferior direito do header, Y=25)
+    int pendingShop = shoppingPendingCount();
+    if (pendingShop > 0) {
+        char sb[16];
+        snprintf(sb, sizeof(sb), "Lista: %d", pendingShop);
+        display.setFont(&fonts::Font0);
+        display.setTextDatum(TR_DATUM);
+        display.setTextColor(COLOR_TEXT_SUBTLE, COLOR_BACKGROUND);
+        display.drawString(sb, display.width() - 6, 25);
     }
 
     // --- Hora grande (Y fixo — não desloca por nextEventText) ---
@@ -672,8 +714,24 @@ void screenHomeDraw(lgfx::LovyanGFX& display, bool syncing, bool isDim) {
         display.drawString(T(SCREEN_HOME_SYNC), display.width() / 2, 104);
     }
 
-    // --- Modo cozinha ativa (wake-lock) ---
-    if (powerIsCookingMode()) {
+    // --- Alerta: porta aberta há muito tempo (prioridade sobre o badge de cozinha) ---
+    if (doorSensorIsLongOpen()) {
+        uint32_t openMs  = doorSensorOpenDurationMs();
+        int      openSec = (int)(openMs / 1000UL);
+        char badge[32];
+        snprintf(badge, sizeof(badge), "PORTA ABERTA  %ds", openSec);
+        display.setFont(&fonts::Font0);
+        display.setTextDatum(MC_DATUM);
+        int  cx = display.width() / 2;
+        int  by = 104;
+        int  tw = display.textWidth(badge) + 14;
+        int  th = 14;
+        bool blink = ((millis() / 400) % 2 == 0);
+        uint16_t bg = blink ? TFT_RED : 0x8000;  // vermelho piscando
+        display.fillRoundRect(cx - tw/2, by - th/2, tw, th, 4, bg);
+        display.setTextColor(COLOR_TEXT_PRIMARY, bg);
+        display.drawString(badge, cx, by);
+    } else if (powerIsCookingMode()) {
         uint32_t remMs  = powerCookingModeRemainingMs();
         int      remMin = (int)((remMs + 59999UL) / 60000UL);   // arredonda pra cima
         char badge[24];

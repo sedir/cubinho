@@ -98,6 +98,10 @@ src/
 ├── events.h/.cpp           ← agenda de eventos lida do SD card (/events.json)
 ├── notifications.h/.cpp    ← push notifications (HTTP + MQTT) + toast + gaveta + /health
 ├── ha_discovery.h/.cpp     ← Home Assistant MQTT Discovery (entidades auto-registradas)
+├── shopping_list.h/.cpp    ← lista de compras compartilhada (NVS + HTTP + MQTT)
+├── family_note.h/.cpp      ← recado curto da família exibido na Home (via HTTP/MQTT)
+├── recipes.h/.cpp          ← presets nome+duração para timers (ex: "Ovo 6min")
+├── door_sensor.h/.cpp      ← detecção de abertura da porta via IMU + contagem diária
 ├── i18n.h                  ← strings user-facing (hoje PT-BR, macro T() para futura troca)
 └── chime_wav.h             ← audio WAV do alarme (array PROGMEM)
 ```
@@ -200,6 +204,10 @@ permitem trocar o slot focado. Cada slot mantém estado independente.
 **Presets**: 1, 3, 5, 10, 15, 20, 30 minutos (default: 5 min). Selecionado em branco, demais em cinza escuro.
 
 **Alarme sonoro**: `M5.Speaker.playWav(CHIME_WAV, CHIME_WAV_LEN)` a cada 3,2s. Display pisca a 400ms. Volume alarme = 160; volume UI = 85. Som para ao fechar (`M5.Speaker.stop()`).
+
+**Knock-to-silence**: enquanto o alarme está ativo, `main.cpp` amostra o acelerômetro a 10Hz e mede `|mag_atual - mag_anterior|`. Se o delta exceder 0.8 g (acima do limiar de wake), considera que o usuário bateu na geladeira e chama `screenHomeDismissAlarm()` + `M5.Speaker.stop()`. Grace period de 500ms após o início do alarme evita falso positivo pela própria vibração do toque inicial.
+
+**Receitas (`recipes.h/.cpp`)**: 10 presets de nome + duração (1–99 min), editáveis via `GET/POST /recipes` no servidor HTTP (JSON array). Defaults: Forno 30, Massa 9, Café 4, Chá 5, Sopa 15, Arroz 18, Bolo 35, Ovo 6, Frango 25, Livre 5. Ao selecionar um preset (toque curto nos nomes), o slot em SETTING tem seu nome e duração aplicados em conjunto — slots com nome customizado via teclado preservam o nome. Persistência: NVS namespace "rcp", chave "all" (JSON single-key).
 
 ### Notas de implementação
 - **SHT40 não existe no CoreS3** — código de leitura I2C removido.
@@ -403,6 +411,7 @@ Bateria ≤ 10% → dim imediato. Bateria ≤ 5% → "BATERIA BAIXA!" piscante s
 |---|---|
 | Dim | Apagados |
 | Alarme ativo | Pisca vermelho sincronizado com o display (400ms) |
+| Porta aberta > 60 s | Pulso vermelho lento (1 s — ignora dim para aviso visível) |
 | Timer RUNNING | Breathing verde |
 | Normal/ativo | Apagados |
 
@@ -521,6 +530,52 @@ Estados publicados em `cubinho_<mac6hex>/<obj>` a cada 30s (throttle). `node_id`
 ### Ícones
 
 `NotifIcon { INFO, WARN, ERROR, OK }` — mapeados pra cores (azul/laranja/vermelho/verde) e glifos (`i/!/x/v`).
+
+---
+
+## Lista de compras (`shopping_list`)
+
+CRUD simples de até `SHOPPING_MAX = 20` itens (`name[32]`, `done`, `addedAt`). Persistido em NVS namespace "shop", chave única "list" (JSON single-key — evita fragmentação). `shoppingAdd()` é case-insensitive e re-ativa itens já marcados como feitos quando readicionados com o mesmo nome.
+
+**Interfaces**:
+- HTTP `GET /shopping` — página HTML com checkboxes (auto-refresh a cada 5s) + formulário de adicionar
+- HTTP `GET /shopping.json` — dump JSON
+- HTTP `POST /shopping` — form/JSON com `{"action":"add|toggle|remove|clear|clear_done", ...}`
+- MQTT sub-tópico `<base>/shopping` — mesmo payload JSON (roteado por suffix em `mqttOnMessage()`)
+
+**UI**: badge `Lista: N` no canto superior direito da Home quando há itens pendentes.
+
+---
+
+## Notas da família (`family_note`)
+
+Recado curto (até `NOTE_TEXT_LEN = 96` chars) com timestamp. Persiste em NVS namespace "note" (chaves "text" e "ts"). `familyNoteSet()` trima whitespace no final. Texto vazio = sem nota ativa.
+
+**Interfaces**:
+- HTTP `GET /note` → JSON `{text, timestamp, has}`
+- HTTP `POST /note` → form/JSON `{text}` (envie vazio pra limpar)
+- MQTT sub-tópico `<base>/note`
+
+**UI**: substitui a linha `próximo:` (evento do calendário) no cabeçalho da Home quando há nota ativa, renderizado em amarelo (0xFFE0) para destaque.
+
+---
+
+## Sensor de porta (`door_sensor`)
+
+Detecta o swing da porta via acelerômetro. O CoreS3 está fixado na porta — quando ela abre/gira, o vetor de gravidade muda de direção em relação ao device.
+
+**Funcionamento**:
+1. Ao boot, amostra o acelerômetro por `DOOR_BASELINE_CALIB_MS = 3000ms` e calcula a média `(bx, by, bz)` = baseline (porta fechada)
+2. A 5Hz, computa `delta = ||(ax,ay,az) - (bx,by,bz)||`
+3. `delta > 0.35 g` por `DOOR_DEBOUNCE_MS = 500ms` → confirma porta aberta (rising edge incrementa contador diário)
+4. `delta < 0.35 g` por 500ms → porta fechada (log da duração)
+5. Se abertura > `DOOR_LONG_OPEN_MS = 60s` → alerta: overlay piscante vermelho na Home + LEDs vermelhos com pulso lento (1s) + push notification one-shot
+
+**Persistência**: NVS namespace "door", chaves `today` (contador), `yday` (ontem), `day` (`tm_yday`). Rollover automático à meia-noite via `getLocalTime()`.
+
+**API pública**: `doorSensorIsOpen()`, `doorSensorOpenDurationMs()`, `doorSensorTodayCount()`, `doorSensorYesterdayCount()`, `doorSensorIsLongOpen()`, `doorSensorRecalibrate()` (após remontagem).
+
+**Telemetria**: `/health` expõe `door_open`, `door_open_s`, `door_today`, `door_yesterday`.
 
 ---
 

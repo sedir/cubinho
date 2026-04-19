@@ -30,6 +30,8 @@ int  screenHomeGetFocusedSlot();
 bool screenHomeIsAlarmActive();
 // Retorna o slot que está em DONE (alarme), ou -1
 int  screenHomeAlarmSlot();
+// Silencia os alarmes em DONE, voltando os slots para SETTING.
+void screenHomeDismissAlarm();
 
 // Deep sleep — retorna true se qualquer timer está rodando ou pausado
 bool screenHomeIsTimerActive();

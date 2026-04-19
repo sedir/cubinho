@@ -23,7 +23,18 @@ void ledOff() {
     FastLED.show();
 }
 
-void ledUpdate(bool isDim, bool alarmActive, bool timerRunning) {
+void ledUpdate(bool isDim, bool alarmActive, bool timerRunning, bool doorAlert) {
+    // Alerta de porta ignora dim — precisa ser visto mesmo com display apagado
+    if (doorAlert && !alarmActive) {
+        // Pulso vermelho mais lento (1 s ciclo) para diferenciar do alarme
+        uint32_t now = millis();
+        bool on = (now / 500) % 2 == 0;
+        fill_solid(leds, LED_COUNT, CRGB::Red);
+        FastLED.setBrightness(on ? 180 : 0);
+        FastLED.show();
+        return;
+    }
+
     if (isDim || (!alarmActive && !timerRunning)) { ledOff(); return; }
 
     uint32_t now = millis();
